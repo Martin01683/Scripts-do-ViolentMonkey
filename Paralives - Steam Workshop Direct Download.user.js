@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -34,42 +34,49 @@
     if (!isParalives) return;
 
     // ==========================================
-    // SISTEMA VISUAL: TOOLTIP INVASOR DA TOP LAYER
+    // SISTEMA VISUAL: TOOLTIP INVASOR BLINDADO (POPOVER API)
     // ==========================================
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-tooltip {
-            position: fixed; /* Alterado de absolute para fixed (Ignora o scroll do Modal) */
+            position: fixed !important;
+            inset: auto !important; /* Desativa centralização padrão do Popover */
+            margin: 0 !important;   /* Desativa margens padrão do Popover */
             z-index: 2147483647 !important;
-            background: #171a21;
-            border: 1px solid #3d4450;
-            border-radius: 6px;
-            padding: 12px;
-            color: #acb2b8;
-            font-family: "Motiva Sans", Arial, Helvetica, sans-serif;
-            font-size: 13px;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.8);
-            pointer-events: none;
+            background: #171a21 !important;
+            border: 1px solid #3d4450 !important;
+            border-radius: 6px !important;
+            padding: 12px !important;
+            color: #acb2b8 !important;
+            font-family: "Motiva Sans", Arial, Helvetica, sans-serif !important;
+            font-size: 13px !important;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important;
+            pointer-events: none !important;
             opacity: 0;
             transition: opacity 0.1s ease-in-out;
-            white-space: nowrap;
+            white-space: nowrap !important;
         }
-        .insane-custom-tooltip.show { opacity: 1; }
-        .insane-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
-        .insane-tooltip-success { color: #A3E33B; }
-        .insane-tooltip-warning { color: #F59E0B; }
-        .insane-tooltip-error { color: #EF4444; }
-        .insane-tooltip-info { color: #66c0f4; }
-        .insane-tooltip-row { margin: 4px 0; }
-        .insane-tooltip-label { color: #8f98a0; display: inline-block; width: 60px; }
-        .insane-tooltip-value { color: #E2E8F0; font-weight: 500; }
-        .insane-tooltip-loading { color: #8f98a0; font-style: italic; animation: pulse 1.5s infinite; }
+        .insane-custom-tooltip.show { opacity: 1 !important; }
+        .insane-tooltip-title { font-weight: bold !important; font-size: 14px !important; margin-bottom: 8px !important; padding-bottom: 6px !important; border-bottom: 1px solid #3d4450 !important; display: flex !important; align-items: center !important; gap: 6px !important; }
+        .insane-tooltip-success { color: #A3E33B !important; }
+        .insane-tooltip-warning { color: #F59E0B !important; }
+        .insane-tooltip-error { color: #EF4444 !important; }
+        .insane-tooltip-info { color: #66c0f4 !important; }
+        .insane-tooltip-row { margin: 4px 0 !important; }
+        .insane-tooltip-label { color: #8f98a0 !important; display: inline-block !important; width: 60px !important; }
+        .insane-tooltip-value { color: #E2E8F0 !important; font-weight: 500 !important; }
+        .insane-tooltip-loading { color: #8f98a0 !important; font-style: italic !important; animation: pulse 1.5s infinite !important; }
         @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
     `;
     document.head.appendChild(style);
 
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
+    
+    // Configura o Tooltip como Popover nativo (Força na Top Layer)
+    if ('popover' in tooltipGlobal) {
+        tooltipGlobal.setAttribute('popover', 'manual');
+    }
     document.body.appendChild(tooltipGlobal);
 
     let hoveredElement = null;
@@ -77,24 +84,35 @@
     function applyCustomTooltip(element, initialHtml) {
         element._tooltipHtml = initialHtml;
         
-        element.addEventListener('mouseenter', () => {
+        element.addEventListener('mouseenter', (e) => {
+            e.stopPropagation(); // Tenta impedir os tooltips nativos da Steam de abrirem juntos
             hoveredElement = element;
             tooltipGlobal.innerHTML = element._tooltipHtml;
             
-            // ===== O HACK DA TOP LAYER =====
-            // Injeta o Tooltip dentro do <dialog> ativo para herdar a prioridade da camada
-            const parentDialog = element.closest('dialog');
-            if (parentDialog && tooltipGlobal.parentNode !== parentDialog) {
-                parentDialog.appendChild(tooltipGlobal);
-            } else if (!parentDialog && tooltipGlobal.parentNode !== document.body) {
-                document.body.appendChild(tooltipGlobal);
+            // ===== A SOLUÇÃO SUPREMA DE CAMADAS =====
+            if (typeof tooltipGlobal.showPopover === 'function') {
+                try { 
+                    if (!tooltipGlobal.matches(':popover-open')) {
+                        tooltipGlobal.showPopover(); // Invoca a Top Layer do navegador
+                    }
+                } catch(err) {}
+            } else {
+                // Fallback para navegadores muito antigos
+                const parentDialog = element.closest('dialog');
+                if (parentDialog) {
+                    parentDialog.appendChild(tooltipGlobal);
+                } else {
+                    document.body.appendChild(tooltipGlobal); 
+                }
             }
 
             tooltipGlobal.classList.add('show');
         });
         
+        element.addEventListener('mouseover', (e) => e.stopPropagation());
+
         element.addEventListener('mousemove', (e) => {
-            // Usando clientX/clientY (coordenadas do monitor) em vez de pageX (do site inteiro)
+            e.stopPropagation();
             let left = e.clientX + 15;
             let top = e.clientY + 15;
             
@@ -115,9 +133,17 @@
             tooltipGlobal.style.top = top + 'px';
         });
 
-        element.addEventListener('mouseleave', () => {
+        element.addEventListener('mouseleave', (e) => {
+            e.stopPropagation();
             hoveredElement = null;
             tooltipGlobal.classList.remove('show');
+            if (typeof tooltipGlobal.hidePopover === 'function') {
+                try { 
+                    if (tooltipGlobal.matches(':popover-open')) {
+                        tooltipGlobal.hidePopover(); 
+                    }
+                } catch(err) {}
+            }
         });
     }
 
@@ -132,6 +158,7 @@
         element.href = url;
         element.addEventListener('click', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             GM_openInTab(url, { active: false });
         });
     }
