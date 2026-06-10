@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -34,15 +34,15 @@
     if (!isParalives) return;
 
     // ==========================================
-    // SISTEMA VISUAL: TOOLTIP POPOVER (COM MOVIMENTO CORRIGIDO)
+    // SISTEMA VISUAL: TOOLTIP POPOVER
     // ==========================================
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-tooltip {
             position: fixed !important;
             margin: 0 !important; 
-            right: auto !important; /* Libera a direita para não esticar */
-            bottom: auto !important; /* Libera o fundo para não esticar */
+            right: auto !important; 
+            bottom: auto !important; 
             z-index: 2147483647 !important;
             background: #171a21 !important;
             border: 1px solid #3d4450 !important;
@@ -109,7 +109,7 @@
             let left = e.clientX + 15;
             let top = e.clientY + 15;
             
-            const tooltipWidth = tooltipGlobal.offsetWidth || 200; // Fallback caso não renderize a tempo
+            const tooltipWidth = tooltipGlobal.offsetWidth || 200; 
             const tooltipHeight = tooltipGlobal.offsetHeight || 100;
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
@@ -122,7 +122,6 @@
                 top = e.clientY - tooltipHeight - 15;
             }
 
-            // O Segredo: Usar o setProperty com !important para vencer o default do Popover
             tooltipGlobal.style.setProperty('left', left + 'px', 'important');
             tooltipGlobal.style.setProperty('top', top + 'px', 'important');
         });
@@ -201,7 +200,7 @@
     }
 
     // ==========================================
-    // CACHE DA STEAM (Busca sob demanda no Hover)
+    // CACHE DA STEAM E DEBOUNCE
     // ==========================================
     let steamDateCache = {};
 
@@ -411,11 +410,21 @@
                         `);
 
                         let isHoverFetched = false;
+                        
+                        // LÓGICA DE DEBOUNCE (Prevenção de Spam)
                         badge.addEventListener('mouseenter', () => {
                             if (!isHoverFetched && dataInsane) {
-                                isHoverFetched = true;
-                                fetchSteamDateOnHover(modId, badge, dataInsane);
+                                // Inicia um timer de 500ms
+                                badge._hoverTimer = setTimeout(() => {
+                                    isHoverFetched = true;
+                                    fetchSteamDateOnHover(modId, badge, dataInsane);
+                                }, 500);
                             }
+                        });
+
+                        badge.addEventListener('mouseleave', () => {
+                            // Se o mouse sair antes dos 500ms, cancela a busca
+                            if (badge._hoverTimer) clearTimeout(badge._hoverTimer);
                         });
 
                     } else {
