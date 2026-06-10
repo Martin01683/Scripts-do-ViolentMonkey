@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -34,14 +34,15 @@
     if (!isParalives) return;
 
     // ==========================================
-    // SISTEMA VISUAL: TOOLTIP INVASOR BLINDADO (POPOVER API)
+    // SISTEMA VISUAL: TOOLTIP POPOVER (COM MOVIMENTO CORRIGIDO)
     // ==========================================
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-tooltip {
             position: fixed !important;
-            inset: auto !important; /* Desativa centralização padrão do Popover */
-            margin: 0 !important;   /* Desativa margens padrão do Popover */
+            margin: 0 !important; 
+            right: auto !important; /* Libera a direita para não esticar */
+            bottom: auto !important; /* Libera o fundo para não esticar */
             z-index: 2147483647 !important;
             background: #171a21 !important;
             border: 1px solid #3d4450 !important;
@@ -73,7 +74,6 @@
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
     
-    // Configura o Tooltip como Popover nativo (Força na Top Layer)
     if ('popover' in tooltipGlobal) {
         tooltipGlobal.setAttribute('popover', 'manual');
     }
@@ -85,25 +85,18 @@
         element._tooltipHtml = initialHtml;
         
         element.addEventListener('mouseenter', (e) => {
-            e.stopPropagation(); // Tenta impedir os tooltips nativos da Steam de abrirem juntos
+            e.stopPropagation(); 
             hoveredElement = element;
             tooltipGlobal.innerHTML = element._tooltipHtml;
             
-            // ===== A SOLUÇÃO SUPREMA DE CAMADAS =====
             if (typeof tooltipGlobal.showPopover === 'function') {
                 try { 
-                    if (!tooltipGlobal.matches(':popover-open')) {
-                        tooltipGlobal.showPopover(); // Invoca a Top Layer do navegador
-                    }
+                    if (!tooltipGlobal.matches(':popover-open')) tooltipGlobal.showPopover(); 
                 } catch(err) {}
             } else {
-                // Fallback para navegadores muito antigos
                 const parentDialog = element.closest('dialog');
-                if (parentDialog) {
-                    parentDialog.appendChild(tooltipGlobal);
-                } else {
-                    document.body.appendChild(tooltipGlobal); 
-                }
+                if (parentDialog) parentDialog.appendChild(tooltipGlobal);
+                else document.body.appendChild(tooltipGlobal); 
             }
 
             tooltipGlobal.classList.add('show');
@@ -116,8 +109,8 @@
             let left = e.clientX + 15;
             let top = e.clientY + 15;
             
-            const tooltipWidth = tooltipGlobal.offsetWidth;
-            const tooltipHeight = tooltipGlobal.offsetHeight;
+            const tooltipWidth = tooltipGlobal.offsetWidth || 200; // Fallback caso não renderize a tempo
+            const tooltipHeight = tooltipGlobal.offsetHeight || 100;
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
 
@@ -129,8 +122,9 @@
                 top = e.clientY - tooltipHeight - 15;
             }
 
-            tooltipGlobal.style.left = left + 'px';
-            tooltipGlobal.style.top = top + 'px';
+            // O Segredo: Usar o setProperty com !important para vencer o default do Popover
+            tooltipGlobal.style.setProperty('left', left + 'px', 'important');
+            tooltipGlobal.style.setProperty('top', top + 'px', 'important');
         });
 
         element.addEventListener('mouseleave', (e) => {
@@ -139,9 +133,7 @@
             tooltipGlobal.classList.remove('show');
             if (typeof tooltipGlobal.hidePopover === 'function') {
                 try { 
-                    if (tooltipGlobal.matches(':popover-open')) {
-                        tooltipGlobal.hidePopover(); 
-                    }
+                    if (tooltipGlobal.matches(':popover-open')) tooltipGlobal.hidePopover(); 
                 } catch(err) {}
             }
         });
