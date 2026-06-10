@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -34,13 +34,13 @@
     if (!isParalives) return;
 
     // ==========================================
-    // SISTEMA VISUAL: TOOLTIP GLOBAL COM COLISÃO
+    // SISTEMA VISUAL: TOOLTIP GLOBAL COM COLISÃO E Z-INDEX MÁXIMO
     // ==========================================
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-tooltip {
             position: absolute;
-            z-index: 9999999 !important;
+            z-index: 2147483647 !important; /* Valor máximo possível na web para ficar sobre TUDO */
             background: #171a21;
             border: 1px solid #3d4450;
             border-radius: 6px;
@@ -86,18 +86,15 @@
             let left = e.pageX + 15;
             let top = e.pageY + 15;
             
-            // Dimensões do Tooltip e da Janela
             const tooltipWidth = tooltipGlobal.offsetWidth;
             const tooltipHeight = tooltipGlobal.offsetHeight;
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
 
-            // Se for bater na borda DIREITA da tela, joga o tooltip para a ESQUERDA do mouse
             if (e.clientX + 15 + tooltipWidth > windowWidth - 10) {
                 left = e.pageX - tooltipWidth - 15;
             }
 
-            // Se for bater na borda INFERIOR da tela, joga o tooltip para CIMA do mouse
             if (e.clientY + 15 + tooltipHeight > windowHeight - 10) {
                 top = e.pageY - tooltipHeight - 15;
             }
