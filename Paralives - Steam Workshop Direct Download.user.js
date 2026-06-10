@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -34,13 +34,13 @@
     if (!isParalives) return;
 
     // ==========================================
-    // SISTEMA VISUAL: TOOLTIP GLOBAL COM COLISÃO E Z-INDEX MÁXIMO
+    // SISTEMA VISUAL: TOOLTIP INVASOR DA TOP LAYER
     // ==========================================
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-tooltip {
-            position: absolute;
-            z-index: 2147483647 !important; /* Valor máximo possível na web para ficar sobre TUDO */
+            position: fixed; /* Alterado de absolute para fixed (Ignora o scroll do Modal) */
+            z-index: 2147483647 !important;
             background: #171a21;
             border: 1px solid #3d4450;
             border-radius: 6px;
@@ -76,15 +76,27 @@
 
     function applyCustomTooltip(element, initialHtml) {
         element._tooltipHtml = initialHtml;
+        
         element.addEventListener('mouseenter', () => {
             hoveredElement = element;
             tooltipGlobal.innerHTML = element._tooltipHtml;
+            
+            // ===== O HACK DA TOP LAYER =====
+            // Injeta o Tooltip dentro do <dialog> ativo para herdar a prioridade da camada
+            const parentDialog = element.closest('dialog');
+            if (parentDialog && tooltipGlobal.parentNode !== parentDialog) {
+                parentDialog.appendChild(tooltipGlobal);
+            } else if (!parentDialog && tooltipGlobal.parentNode !== document.body) {
+                document.body.appendChild(tooltipGlobal);
+            }
+
             tooltipGlobal.classList.add('show');
         });
         
         element.addEventListener('mousemove', (e) => {
-            let left = e.pageX + 15;
-            let top = e.pageY + 15;
+            // Usando clientX/clientY (coordenadas do monitor) em vez de pageX (do site inteiro)
+            let left = e.clientX + 15;
+            let top = e.clientY + 15;
             
             const tooltipWidth = tooltipGlobal.offsetWidth;
             const tooltipHeight = tooltipGlobal.offsetHeight;
@@ -92,11 +104,11 @@
             const windowHeight = window.innerHeight;
 
             if (e.clientX + 15 + tooltipWidth > windowWidth - 10) {
-                left = e.pageX - tooltipWidth - 15;
+                left = e.clientX - tooltipWidth - 15;
             }
 
             if (e.clientY + 15 + tooltipHeight > windowHeight - 10) {
-                top = e.pageY - tooltipHeight - 15;
+                top = e.clientY - tooltipHeight - 15;
             }
 
             tooltipGlobal.style.left = left + 'px';
