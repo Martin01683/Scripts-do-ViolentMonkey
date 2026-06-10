@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.8
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -414,16 +414,16 @@
                         // LÓGICA DE DEBOUNCE (Prevenção de Spam)
                         badge.addEventListener('mouseenter', () => {
                             if (!isHoverFetched && dataInsane) {
-                                // Inicia um timer de 2000ms (2 segundos)
+                                // Inicia um timer de 1500ms (1,5 segundos)
                                 badge._hoverTimer = setTimeout(() => {
                                     isHoverFetched = true;
                                     fetchSteamDateOnHover(modId, badge, dataInsane);
-                                }, 2000);
+                                }, 1500);
                             }
                         });
 
                         badge.addEventListener('mouseleave', () => {
-                            // Se o mouse sair antes dos 2 segundos, cancela a busca
+                            // Se o mouse sair antes de 1,5 segundos, cancela a busca
                             if (badge._hoverTimer) clearTimeout(badge._hoverTimer);
                         });
 
