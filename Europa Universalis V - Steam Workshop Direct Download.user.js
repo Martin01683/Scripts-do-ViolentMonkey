@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/3450310/workshop/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Europa%20Universalis%20V%20-%20Steam%20Workshop%20Direct%20Download.user.js
@@ -177,6 +178,31 @@
     if (typeof dropdownGlobal.showPopover === 'function') dropdownGlobal.setAttribute('popover', 'manual');
 
     document.addEventListener('click', (e) => {
+        // Interceptar cliques em links do script para forçar abertura em background sem perder o foco
+        const scriptLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
+        if (scriptLink && scriptLink.hasAttribute('href') && scriptLink.target === '_blank') {
+            // Apenas intercepta se for clique normal com botão esquerdo (0) e sem usar atalhos (Ctrl/Shift)
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                if (typeof GM_openInTab === 'function') {
+                    // active: false obriga a aba a abrir e manter o usuário na tela atual
+                    GM_openInTab(scriptLink.href, { active: false, insert: true });
+                } else {
+                    window.open(scriptLink.href, '_blank');
+                }
+                
+                // Se foi o link de dentro do dropdown que foi clicado, fecha-o
+                if (scriptLink.classList.contains('insane-bg-link') && dropdownGlobal.classList.contains('show')) {
+                    dropdownGlobal.classList.remove('show');
+                    safeHidePopover(dropdownGlobal);
+                    dropdownGlobal.lastArrow = null;
+                }
+                return;
+            }
+        }
+
         const arrowBtn = e.target.closest('.insane-btn-arrow');
         if (arrowBtn) {
             e.preventDefault(); e.stopPropagation();
@@ -219,7 +245,6 @@
 
     // --- MOTOR EM TEMPO REAL: TOOLTIP E AUTO-REFRESH ---
     setInterval(() => {
-        // 1. Atualiza tooltips abertos
         if (tooltipGlobal.classList.contains('show')) {
             const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
             countdowns.forEach(el => {
@@ -228,13 +253,10 @@
             });
         }
 
-        // 2. Rechecagem automática APENAS se a aba estiver visível/ativa
         if (!document.hidden) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
 
-            // ── FIX 1: invalida o cache em memória da Insane DB quando expirar ──
-            // Sem isso, fetchInsaneData() retornava o objeto antigo indefinidamente.
             if (dbExpired) {
                 insaneDatabaseCache = null;
             }
@@ -248,9 +270,6 @@
                         ? (now >= localSteamCache[modId].exp)
                         : false;
 
-                    // ── FIX 2: apaga steamDateCache[modId] quando o localSteamCache expirar ──
-                    // Sem isso, drawDateComparison() encontrava o valor antigo em memória e
-                    // nunca chegava no bloco que dispara o novo fetch para a API da Steam.
                     if (steamExpired) {
                         delete steamDateCache[modId];
                     }
@@ -394,8 +413,6 @@
             onerror: () => {
                 const now = Date.now();
                 idsToFetch.forEach(id => {
-                    // FETCH_ERROR (≠ NO_DATE): a API não respondeu — não sabemos a versão.
-                    // Isso evita o falso positivo de mostrar ✅ quando houve falha de rede.
                     steamDateCache[id] = STEAM_FETCH_ERROR;
                     localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_MS };
                     pendingSteamIDs.delete(id);
@@ -443,16 +460,11 @@
     }
 
     function fetchInsaneData(callback) {
-        // ── FIX 1 (parte 2): checa insaneCacheExp antes de retornar o cache em memória ──
-        // Antes, a guard só testava !== null, ignorando se o cache já havia expirado.
-        // O timer reseta insaneDatabaseCache = null quando dbExpired é true, mas essa
-        // verificação aqui garante a correção mesmo em chamadas diretas fora do timer.
         if (insaneDatabaseCache !== null && Date.now() < insaneCacheExp) {
             callback(insaneDatabaseCache);
             return;
         }
 
-        // Se chegou aqui, o cache em memória está vazio ou expirado: tenta o localStorage
         try {
             const stored = localStorage.getItem('EU5_InsaneCache');
             if (stored) {
@@ -540,8 +552,6 @@
 
                 if (dataSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
                     const cachedVal = localSteamCache[modId].date;
-                    // Preserva sentinels (NO_DATE e FETCH_ERROR) ao restaurar do localStorage;
-                    // só cria Date() se o valor for um timestamp ISO real.
                     dataSteam = steamDateCache[modId] =
                         (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR)
                             ? cachedVal
@@ -552,9 +562,6 @@
                     container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`;
                     pendingSteamIDs.add(modId);
 
-                    // Set em vez de Array: .add() ignora a mesma referência de função
-                    // caso drawDateComparison seja registrada duas vezes antes do fetch
-                    // completar, evitando double-render no mesmo container.
                     if (!steamCallbacks.has(modId)) steamCallbacks.set(modId, new Set());
                     steamCallbacks.get(modId).add(drawDateComparison);
 
@@ -589,9 +596,6 @@
                     : 'N/A';
 
                 if (dataSteam === STEAM_FETCH_ERROR) {
-                    // Falha de rede real — exibe estado de erro distinto do ✅ verde.
-                    // O link da Insane ainda funciona, mas o usuário sabe que a versão
-                    // não foi verificada, ao contrário do falso positivo anterior.
                     container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else if (dataSteam === STEAM_NO_DATE || !dataInsane || dataInsane >= dataSteam) {
