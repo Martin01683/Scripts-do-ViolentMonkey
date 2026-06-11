@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -30,7 +30,7 @@
         downloadWarning: '⚠️ Baixar',
         modUpdated:      'MOD ATUALIZADO',
         modOutdated:     'MOD DESATUALIZADO',
-        requestUpdate:   '💬 Pedir Atualização no Fórum',
+        requestUpdate:   'Pedir Atualização no Fórum',
         labelSteam:      'Steam:',
         labelInsane:     'Insane:',
     } : {
@@ -43,7 +43,7 @@
         downloadWarning: '⚠️ Download',
         modUpdated:      'MOD UP TO DATE',
         modOutdated:     'MOD OUTDATED',
-        requestUpdate:   '💬 Request Update on Forum',
+        requestUpdate:   'Request Update on Forum',
         labelSteam:      'Steam:',
         labelInsane:     'Insane:',
     };
@@ -83,7 +83,7 @@
         .insane-btn-main:hover { transform: none !important; box-shadow: none !important; }
         .insane-btn-arrow { border-top-left-radius: 0 !important; border-bottom-left-radius: 0 !important; padding: 0 8px !important; margin: 0 !important; box-shadow: none !important; }
         .insane-btn-arrow:hover { transform: none !important; box-shadow: none !important; }
-        
+
         .insane-global-dropdown { position: fixed !important; background: #171a21; border: 1px solid #3d4450; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.9); display: none; flex-direction: column; min-width: 220px; z-index: 2147483647 !important; overflow: hidden; }
         .insane-global-dropdown.show { display: flex; }
         .insane-global-dropdown a { padding: 10px 12px; color: #acb2b8; text-decoration: none; font-size: 12px; transition: background 0.2s; font-family: "Motiva Sans", sans-serif; display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -94,7 +94,7 @@
         .insane-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
         .insane-tooltip-success { color: #A3E33B; } .insane-tooltip-warning { color: #F59E0B; } .insane-tooltip-error { color: #ff6b6b; }
         .insane-tooltip-row { margin: 4px 0; } .insane-tooltip-label { color: #8f98a0; display: inline-block; width: 60px; } .insane-tooltip-value { color: #E2E8F0; font-weight: 500; }
-        
+
         #insane-widget-main { display: inline-flex; height: 34px; margin-right: 10px; align-items: center; }
         .insane-widget-container { position: relative; z-index: 10; display: inline-flex; align-items: center; }
         .insane-widget-container:hover { z-index: 9999; }
@@ -108,7 +108,7 @@
         const arrowBtn = e.target.closest('.insane-btn-arrow');
         if (arrowBtn) {
             e.preventDefault(); e.stopPropagation();
-            
+
             if (dropdownGlobal.classList.contains('show') && dropdownGlobal.lastArrow === arrowBtn) {
                 dropdownGlobal.classList.remove('show');
                 dropdownGlobal.lastArrow = null;
@@ -137,10 +137,10 @@
             dropdownGlobal.innerHTML = `
                 <a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>
             `;
-            
+
             dropdownGlobal.style.top = topPos + 'px';
             dropdownGlobal.style.left = leftPos + 'px';
-            
+
             dropdownGlobal.classList.add('show');
             dropdownGlobal.lastArrow = arrowBtn;
             return;
@@ -180,12 +180,12 @@
                 tooltipGlobal.classList.add('show');
             }, 300);
         });
-        
+
         element.addEventListener('mousemove', (e) => {
             const dialogParent = element.closest('dialog');
             let left = e.clientX + 15, top = e.clientY + 15;
             const tooltipWidth = tooltipGlobal.offsetWidth || 200, tooltipHeight = tooltipGlobal.offsetHeight || 100;
-            
+
             if (left + tooltipWidth > window.innerWidth - 10) left = e.clientX - tooltipWidth - 15;
             if (top + tooltipHeight > window.innerHeight - 10) top = e.clientY - tooltipHeight - 15;
 
@@ -198,7 +198,7 @@
                 }
             }
 
-            tooltipGlobal.style.left = left + 'px'; 
+            tooltipGlobal.style.left = left + 'px';
             tooltipGlobal.style.top = top + 'px';
         });
 
@@ -215,7 +215,7 @@
     // A API da Steam aceita até 100 IDs por requisição, então acumulamos os IDs
     // conforme novos cards aparecem no DOM e os enviamos em lotes.
     setInterval(() => {
-        if (!isParalivesPage()) return; 
+        if (!isParalivesPage()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
         isFetchingBatch = true;
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
@@ -240,7 +240,7 @@
                         });
                     }
                 } catch(e) {}
-                
+
                 idsToFetch.forEach(id => { pendingSteamIDs.delete(id); document.dispatchEvent(new Event(`SteamDateResolved_${id}`)); });
                 isFetchingBatch = false;
             },
@@ -339,7 +339,7 @@
     // Roda a cada 1s para detectar novos cards injetados pelo infinite scroll da Steam.
     setInterval(() => {
         if (!isParalivesPage()) return;
-        
+
         if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
@@ -351,6 +351,8 @@
                 subscribeControls.style.flexWrap = 'nowrap';
                 subscribeControls.style.alignItems = 'center';
                 subscribeControls.style.gap = '10px';
+                // Impede que o botão da Steam encolha ao virar flex item.
+                steamBtn.style.flexShrink = '0';
 
                 const container = document.createElement('div');
                 container.id = 'insane-widget-main';
@@ -365,13 +367,13 @@
 
             const subscribeBtn = Array.from(modalRoot.querySelectorAll('button')).find(b => b.getAttribute('data-accent-color') === 'green' || b.querySelector('.SVGIcon_Plus'));
             if (!subscribeBtn) return;
-            
+
             const anchor = subscribeBtn.closest('.tool-tip-source') || subscribeBtn;
             if (!anchor.parentElement.querySelector('.insane-widget-container')) {
                 const container = document.createElement('div');
                 container.className = 'insane-widget-container';
                 container.style.marginRight = '8px';
-                
+
                 anchor.insertAdjacentElement('beforebegin', container);
                 const modId = new URL(titleLink.href).searchParams.get('id');
                 if (modId) renderWidget(container, modId, false);
