@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -19,6 +19,34 @@
     'use strict';
 
     const PARALIVES_APPID = '1118520';
+
+    const t = document.documentElement.lang.toLowerCase().startsWith('pt') ? {
+        loading:         '⏳ Buscando...',
+        checkingVersion: '⏳ Checando Versão...',
+        dbError:         '⚠️ Erro DB',
+        requestMod:      '➕ Pedir Mod',
+        modNotListed:    'Mod não listado. Clique para pedir.',
+        download:        '✅ Baixar',
+        downloadWarning: '⚠️ Baixar',
+        modUpdated:      'MOD ATUALIZADO',
+        modOutdated:     'MOD DESATUALIZADO',
+        requestUpdate:   '💬 Pedir Atualização no Fórum',
+        labelSteam:      'Steam:',
+        labelInsane:     'Insane:',
+    } : {
+        loading:         '⏳ Loading...',
+        checkingVersion: '⏳ Checking Version...',
+        dbError:         '⚠️ DB Error',
+        requestMod:      '➕ Request Mod',
+        modNotListed:    'Mod not listed. Click to request.',
+        download:        '✅ Download',
+        downloadWarning: '⚠️ Download',
+        modUpdated:      'MOD UP TO DATE',
+        modOutdated:     'MOD OUTDATED',
+        requestUpdate:   '💬 Request Update on Forum',
+        labelSteam:      'Steam:',
+        labelInsane:     'Insane:',
+    };
 
     function isParalivesPage() {
         const url = window.location.href;
@@ -107,7 +135,7 @@
             }
 
             dropdownGlobal.innerHTML = `
-                <a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-bg-link"><span>💬</span> Pedir Atualização no Fórum</a>
+                <a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>
             `;
             
             dropdownGlobal.style.top = topPos + 'px';
@@ -262,13 +290,13 @@
 
     function renderWidget(container, modId, isCard) {
         const cClass = isCard ? 'insane-custom-btn-compact' : '';
-        container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">⏳ Buscando...</a>`;
+        container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.loading}</a>`;
 
         fetchInsaneData((db) => {
-            if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">⚠️ Erro DB</a>`; return; }
+            if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
             if (!db[modId]) {
-                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-custom-btn ${cClass} insane-state-error">➕ Pedir Mod</a>`;
-                bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> Mod não listado. Clique para pedir.</div>`);
+                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
+                bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>`);
                 return;
             }
 
@@ -277,29 +305,29 @@
 
             function drawDateComparison() {
                 const dataSteam = steamDateCache[modId];
-                if (!dataSteam) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">⏳ Checando Versão...</a>`; pendingSteamIDs.add(modId); return; }
+                if (!dataSteam) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`; pendingSteamIDs.add(modId); return; }
 
                 const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
                 const strSteam = (dataSteam && dataSteam !== 'NO_DATE') ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
 
                 if (dataSteam === 'NO_DATE' || dataInsane >= dataSteam) {
-                    container.innerHTML = `<a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-success">✅ Baixar</a>`;
+                    container.innerHTML = `<a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
                     bindTooltip(container.firstElementChild, `
-                        <div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> MOD ATUALIZADO</div>
-                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">Steam:</span> <span class="insane-tooltip-value">${strSteam}</span></div>
-                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">Insane:</span> <span class="insane-tooltip-value">${strInsane}</span></div>
+                        <div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>
+                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div>
+                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>
                     `);
                 } else {
                     container.innerHTML = `
                         <div class="insane-btn-group">
-                            <a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">⚠️ Baixar</a>
+                            <a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a>
                             <button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button>
                         </div>
                     `;
                     bindTooltip(container.querySelector('.insane-btn-group'), `
-                        <div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> MOD DESATUALIZADO</div>
-                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">Steam:</span> <span class="insane-tooltip-value">${strSteam}</span></div>
-                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">Insane:</span> <span class="insane-tooltip-value">${strInsane}</span></div>
+                        <div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>
+                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div>
+                        <div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>
                     `);
                 }
             }
