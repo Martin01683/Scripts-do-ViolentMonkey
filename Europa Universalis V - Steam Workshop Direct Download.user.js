@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.3
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -18,6 +18,12 @@
 
     const EU5_APPID = '3450310';
     const CACHE_TIME_MS = 10 * 60 * 1000; // 10 minutos
+
+    // Sentinels para o cache da Steam — mantidos separados intencionalmente:
+    //   STEAM_NO_DATE    → API respondeu, mas o item genuinamente não tem timestamp
+    //   STEAM_FETCH_ERROR → falha de rede/API; versão não pôde ser verificada
+    const STEAM_NO_DATE     = 'NO_DATE';
+    const STEAM_FETCH_ERROR = 'FETCH_ERROR';
 
     const t = document.documentElement.lang.toLowerCase().startsWith('pt') ? {
         loading:         '⏳ Buscando...',
@@ -36,7 +42,9 @@
         cacheSteam:      'Steam:',
         cacheDB:         'Banco de Dados:',
         justNow:         'agora',
-        minAgo:          'min atrás'
+        minAgo:          'min atrás',
+        steamError:      '⚠️ Sem Verificar',
+        steamErrorTip:   'Falha na API Steam. Versão não verificada.'
     } : {
         loading:         '⏳ Loading...',
         checkingVersion: '⏳ Checking Version...',
@@ -54,7 +62,9 @@
         cacheSteam:      'Steam:',
         cacheDB:         'Database:',
         justNow:         'just now',
-        minAgo:          'min ago'
+        minAgo:          'min ago',
+        steamError:      '⚠️ Unverified',
+        steamErrorTip:   'Steam API unreachable. Version not verified.'
     };
 
     function formatCacheAge(ms) {
@@ -352,11 +362,11 @@
                             if (details.publishedfileid) {
                                 const id = details.publishedfileid;
                                 const timestamp = details.time_updated || details.time_created;
-                                const dateVal = timestamp ? new Date(timestamp * 1000) : 'NO_DATE';
+                                const dateVal = timestamp ? new Date(timestamp * 1000) : STEAM_NO_DATE;
 
                                 steamDateCache[id] = dateVal;
                                 localSteamCache[id] = {
-                                    date: dateVal === 'NO_DATE' ? 'NO_DATE' : dateVal.toISOString(),
+                                    date: dateVal === STEAM_NO_DATE ? STEAM_NO_DATE : dateVal.toISOString(),
                                     exp: now + CACHE_TIME_MS
                                 };
                                 handledIds.add(id);
@@ -367,8 +377,8 @@
 
                 idsToFetch.forEach(id => {
                     if (!handledIds.has(id)) {
-                        steamDateCache[id] = 'NO_DATE';
-                        localSteamCache[id] = { date: 'NO_DATE', exp: now + CACHE_TIME_MS };
+                        steamDateCache[id] = STEAM_NO_DATE;
+                        localSteamCache[id] = { date: STEAM_NO_DATE, exp: now + CACHE_TIME_MS };
                     }
                     pendingSteamIDs.delete(id);
 
@@ -384,8 +394,10 @@
             onerror: () => {
                 const now = Date.now();
                 idsToFetch.forEach(id => {
-                    steamDateCache[id] = 'NO_DATE';
-                    localSteamCache[id] = { date: 'NO_DATE', exp: now + CACHE_TIME_MS };
+                    // FETCH_ERROR (≠ NO_DATE): a API não respondeu — não sabemos a versão.
+                    // Isso evita o falso positivo de mostrar ✅ quando houve falha de rede.
+                    steamDateCache[id] = STEAM_FETCH_ERROR;
+                    localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_MS };
                     pendingSteamIDs.delete(id);
 
                     if (steamCallbacks.has(id)) {
@@ -528,7 +540,12 @@
 
                 if (dataSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
                     const cachedVal = localSteamCache[modId].date;
-                    dataSteam = steamDateCache[modId] = (cachedVal === 'NO_DATE') ? 'NO_DATE' : new Date(cachedVal);
+                    // Preserva sentinels (NO_DATE e FETCH_ERROR) ao restaurar do localStorage;
+                    // só cria Date() se o valor for um timestamp ISO real.
+                    dataSteam = steamDateCache[modId] =
+                        (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR)
+                            ? cachedVal
+                            : new Date(cachedVal);
                 }
 
                 if (dataSteam === undefined) {
@@ -567,9 +584,17 @@
                     </div>`;
 
                 const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
-                const strSteam  = (dataSteam && dataSteam !== 'NO_DATE') ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
+                const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR)
+                    ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
+                    : 'N/A';
 
-                if (dataSteam === 'NO_DATE' || !dataInsane || dataInsane >= dataSteam) {
+                if (dataSteam === STEAM_FETCH_ERROR) {
+                    // Falha de rede real — exibe estado de erro distinto do ✅ verde.
+                    // O link da Insane ainda funciona, mas o usuário sabe que a versão
+                    // não foi verificada, ao contrário do falso positivo anterior.
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow">▼</button></div>`;
+                    bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
+                } else if (dataSteam === STEAM_NO_DATE || !dataInsane || dataInsane >= dataSteam) {
                     container.innerHTML = `<a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
                     bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else {
