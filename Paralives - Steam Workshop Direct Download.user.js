@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.4
+// @version      2.5
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -84,25 +84,61 @@
         .insane-btn-arrow { border-top-left-radius: 0 !important; border-bottom-left-radius: 0 !important; padding: 0 8px !important; margin: 0 !important; box-shadow: none !important; }
         .insane-btn-arrow:hover { transform: none !important; box-shadow: none !important; }
 
-        .insane-global-dropdown { position: fixed !important; background: #171a21; border: 1px solid #3d4450; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.9); display: none; flex-direction: column; min-width: 220px; z-index: 2147483647 !important; overflow: hidden; }
+        .insane-global-dropdown { position: fixed !important; background: #171a21; border: 1px solid #3d4450; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.9); display: none; flex-direction: column; min-width: 220px; z-index: 2147483647 !important; overflow: hidden; margin: 0 !important; }
         .insane-global-dropdown.show { display: flex; }
+        .insane-global-dropdown:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .insane-global-dropdown a { padding: 10px 12px; color: #acb2b8; text-decoration: none; font-size: 12px; transition: background 0.2s; font-family: "Motiva Sans", sans-serif; display: flex; align-items: center; gap: 8px; cursor: pointer; }
         .insane-global-dropdown a:hover { background: #3d4450; color: #fff; }
 
         .insane-custom-tooltip { position: fixed !important; margin: 0 !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; padding: 12px !important; color: #acb2b8 !important; font-family: "Motiva Sans", Arial, sans-serif !important; font-size: 13px !important; box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important; pointer-events: none !important; opacity: 0; transition: opacity 0.1s; white-space: nowrap !important; }
         .insane-custom-tooltip.show { opacity: 1 !important; }
+        .insane-custom-tooltip:popover-open { bottom: auto; right: auto; margin: 0 !important; }
+        
         .insane-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
         .insane-tooltip-success { color: #A3E33B; } .insane-tooltip-warning { color: #F59E0B; } .insane-tooltip-error { color: #ff6b6b; }
         .insane-tooltip-row { margin: 4px 0; } .insane-tooltip-label { color: #8f98a0; display: inline-block; width: 60px; } .insane-tooltip-value { color: #E2E8F0; font-weight: 500; }
 
-        #insane-widget-main { display: inline-flex; height: 34px; margin-right: 10px; align-items: center; }
+        #insane-widget-main { display: inline-flex; height: 34px; align-items: center; }
         .insane-widget-container { position: relative; z-index: 10; display: inline-flex; align-items: center; }
         .insane-widget-container:hover { z-index: 9999; }
     `;
     document.head.appendChild(style);
 
+    let popoverHideTimeouts = new WeakMap();
+
+    function safeShowPopover(el) {
+        if (typeof el.showPopover === 'function') {
+            if (popoverHideTimeouts.has(el)) {
+                clearTimeout(popoverHideTimeouts.get(el));
+                popoverHideTimeouts.delete(el);
+            }
+            try { if (!el.matches(':popover-open')) el.showPopover(); } catch(e) {}
+        }
+    }
+
+    function safeHidePopover(el, delay = 0) {
+        if (typeof el.hidePopover === 'function') {
+            if (popoverHideTimeouts.has(el)) {
+                clearTimeout(popoverHideTimeouts.get(el));
+            }
+            if (delay > 0) {
+                const timeoutId = setTimeout(() => {
+                    try { if (el.matches(':popover-open')) el.hidePopover(); } catch(e) {}
+                    popoverHideTimeouts.delete(el);
+                }, delay);
+                popoverHideTimeouts.set(el, timeoutId);
+            } else {
+                try { if (el.matches(':popover-open')) el.hidePopover(); } catch(e) {}
+                popoverHideTimeouts.delete(el);
+            }
+        }
+    }
+
     const dropdownGlobal = document.createElement('div');
     dropdownGlobal.className = 'insane-global-dropdown';
+    if (typeof dropdownGlobal.showPopover === 'function') {
+        dropdownGlobal.setAttribute('popover', 'manual');
+    }
 
     document.addEventListener('click', (e) => {
         const arrowBtn = e.target.closest('.insane-btn-arrow');
@@ -111,6 +147,7 @@
 
             if (dropdownGlobal.classList.contains('show') && dropdownGlobal.lastArrow === arrowBtn) {
                 dropdownGlobal.classList.remove('show');
+                safeHidePopover(dropdownGlobal);
                 dropdownGlobal.lastArrow = null;
                 return;
             }
@@ -120,18 +157,21 @@
             let topPos = rect.bottom;
             let leftPos = rect.right - 220;
 
-            // Dialogs com transform aplicado distorcem as coordenadas do getBoundingClientRect,
-            // então compensamos subtraindo a posição do próprio dialog.
             if (dialogParent) {
                 dialogParent.appendChild(dropdownGlobal);
-                const style = window.getComputedStyle(dialogParent);
-                if (style.transform !== 'none') {
-                    const dialogRect = dialogParent.getBoundingClientRect();
-                    topPos -= dialogRect.top;
-                    leftPos -= dialogRect.left;
-                }
             } else {
                 document.body.appendChild(dropdownGlobal);
+            }
+
+            if (typeof dropdownGlobal.showPopover !== 'function') {
+                if (dialogParent) {
+                    const style = window.getComputedStyle(dialogParent);
+                    if (style.transform !== 'none') {
+                        const dialogRect = dialogParent.getBoundingClientRect();
+                        topPos -= dialogRect.top;
+                        leftPos -= dialogRect.left;
+                    }
+                }
             }
 
             dropdownGlobal.innerHTML = `
@@ -142,12 +182,14 @@
             dropdownGlobal.style.left = leftPos + 'px';
 
             dropdownGlobal.classList.add('show');
+            safeShowPopover(dropdownGlobal);
             dropdownGlobal.lastArrow = arrowBtn;
             return;
         }
 
         if (!e.target.closest('.insane-global-dropdown')) {
             dropdownGlobal.classList.remove('show');
+            safeHidePopover(dropdownGlobal);
             dropdownGlobal.lastArrow = null;
         }
 
@@ -156,45 +198,57 @@
             e.preventDefault(); e.stopPropagation();
             GM_openInTab(insaneLink.href, { active: false, insert: true });
             dropdownGlobal.classList.remove('show');
+            safeHidePopover(dropdownGlobal);
             dropdownGlobal.lastArrow = null;
         }
     });
 
     window.addEventListener('scroll', () => {
         dropdownGlobal.classList.remove('show');
+        safeHidePopover(dropdownGlobal);
         dropdownGlobal.lastArrow = null;
     }, { passive: true });
 
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
+    if (typeof tooltipGlobal.showPopover === 'function') {
+        tooltipGlobal.setAttribute('popover', 'manual');
+    }
     let hoverTimer;
 
     function bindTooltip(element, htmlContent) {
         element.addEventListener('mouseenter', () => {
             hoverTimer = setTimeout(() => {
                 const dialogParent = element.closest('dialog');
-                if (dialogParent) dialogParent.appendChild(tooltipGlobal);
-                else document.body.appendChild(tooltipGlobal);
+                
+                if (dialogParent) {
+                    dialogParent.appendChild(tooltipGlobal);
+                } else {
+                    document.body.appendChild(tooltipGlobal);
+                }
 
                 tooltipGlobal.innerHTML = htmlContent;
                 tooltipGlobal.classList.add('show');
+                safeShowPopover(tooltipGlobal);
             }, 300);
         });
 
         element.addEventListener('mousemove', (e) => {
-            const dialogParent = element.closest('dialog');
             let left = e.clientX + 15, top = e.clientY + 15;
             const tooltipWidth = tooltipGlobal.offsetWidth || 200, tooltipHeight = tooltipGlobal.offsetHeight || 100;
 
             if (left + tooltipWidth > window.innerWidth - 10) left = e.clientX - tooltipWidth - 15;
             if (top + tooltipHeight > window.innerHeight - 10) top = e.clientY - tooltipHeight - 15;
 
-            if (dialogParent) {
-                const style = window.getComputedStyle(dialogParent);
-                if (style.transform !== 'none') {
-                    const dialogRect = dialogParent.getBoundingClientRect();
-                    left -= dialogRect.left;
-                    top -= dialogRect.top;
+            if (typeof tooltipGlobal.showPopover !== 'function') {
+                const dialogParent = element.closest('dialog');
+                if (dialogParent) {
+                    const style = window.getComputedStyle(dialogParent);
+                    if (style.transform !== 'none') {
+                        const dialogRect = dialogParent.getBoundingClientRect();
+                        left -= dialogRect.left;
+                        top -= dialogRect.top;
+                    }
                 }
             }
 
@@ -205,6 +259,7 @@
         element.addEventListener('mouseleave', () => {
             clearTimeout(hoverTimer);
             tooltipGlobal.classList.remove('show');
+            safeHidePopover(tooltipGlobal, 100); 
         });
     }
 
@@ -212,8 +267,6 @@
     let pendingSteamIDs = new Set();
     let isFetchingBatch = false;
 
-    // A API da Steam aceita até 100 IDs por requisição, então acumulamos os IDs
-    // conforme novos cards aparecem no DOM e os enviamos em lotes.
     setInterval(() => {
         if (!isParalivesPage()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
@@ -336,7 +389,6 @@
         });
     }
 
-    // Roda a cada 1s para detectar novos cards injetados pelo infinite scroll da Steam.
     setInterval(() => {
         if (!isParalivesPage()) return;
 
@@ -346,13 +398,35 @@
             const subscribeControls = steamBtn ? steamBtn.parentElement : null;
 
             if (modId && subscribeControls && !document.getElementById('insane-widget-main')) {
-                // Força flex no container da Steam para evitar que nosso botão quebre linha.
+                
+                // Conserta a caixa pai da Steam para que o botão não vaze para fora em idiomas de texto longo
+                const gameArea = subscribeControls.parentElement;
+                if (gameArea && gameArea.classList.contains('game_area_purchase_game')) {
+                    gameArea.style.display = 'flex';
+                    gameArea.style.flexWrap = 'wrap';
+                    gameArea.style.alignItems = 'center';
+                    gameArea.style.justifyContent = 'space-between';
+                    gameArea.style.gap = '15px';
+
+                    const titleH1 = gameArea.querySelector('h1');
+                    if (titleH1) {
+                        titleH1.style.float = 'none';
+                        titleH1.style.width = 'auto';
+                        titleH1.style.flex = '1 1 auto';
+                        titleH1.style.margin = '0';
+                    }
+                }
+
+                // Ajusta o próprio container de botões para organizar lado a lado ou quebrar linha de forma fluída
+                subscribeControls.style.float = 'none';
                 subscribeControls.style.display = 'flex';
-                subscribeControls.style.flexWrap = 'nowrap';
+                subscribeControls.style.flexWrap = 'wrap';
                 subscribeControls.style.alignItems = 'center';
+                subscribeControls.style.justifyContent = 'flex-end';
                 subscribeControls.style.gap = '10px';
-                // Impede que o botão da Steam encolha ao virar flex item.
+                
                 steamBtn.style.flexShrink = '0';
+                steamBtn.style.margin = '0';
 
                 const container = document.createElement('div');
                 container.id = 'insane-widget-main';
