@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -214,6 +214,7 @@
         const bgLink = e.target.closest('a.insane-custom-btn[target="_blank"], a.insane-bg-link[target="_blank"]');
         if (bgLink) {
             e.preventDefault();
+            e.stopPropagation();
             openInBackground(bgLink.href);
             if (dropdownGlobal.classList.contains('show')) {
                 dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
