@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.6
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/1118520/workshop/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
-// @grant        unsafeWindow
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Paralives%20-%20Steam%20Workshop%20Direct%20Download.user.js
