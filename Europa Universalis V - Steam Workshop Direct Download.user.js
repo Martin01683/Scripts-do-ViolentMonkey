@@ -2,7 +2,7 @@
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
 // @version      1.0
-// @description  Link direto com cache corrigido e proteção anti-loop
+// @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/3450310/workshop/*
