@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      2.7
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -262,13 +262,24 @@
         });
     }
 
+    // --- NOVA LÓGICA DE API ORIENTADA A EVENTOS ---
     let steamDateCache = {};
     let pendingSteamIDs = new Set();
     let isFetchingBatch = false;
+    let steamQueueTimeout = null;
 
-    setInterval(() => {
+    function triggerSteamFetch() {
+        if (!isFetchingBatch && pendingSteamIDs.size > 0) {
+            clearTimeout(steamQueueTimeout);
+            // Agrupa múltiplas chamadas rápidas em uma única requisição
+            steamQueueTimeout = setTimeout(processSteamQueue, 100);
+        }
+    }
+
+    function processSteamQueue() {
         if (!isParalivesPage()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
+        
         isFetchingBatch = true;
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
 
@@ -293,12 +304,24 @@
                     }
                 } catch(e) {}
 
-                idsToFetch.forEach(id => { pendingSteamIDs.delete(id); document.dispatchEvent(new Event(`SteamDateResolved_${id}`)); });
+                idsToFetch.forEach(id => { 
+                    pendingSteamIDs.delete(id); 
+                    document.dispatchEvent(new Event(`SteamDateResolved_${id}`)); 
+                });
+                
                 isFetchingBatch = false;
+                triggerSteamFetch(); // Se houveram mais itens adicionados enquanto buscava
             },
-            onerror: () => { idsToFetch.forEach(id => { pendingSteamIDs.delete(id); document.dispatchEvent(new Event(`SteamDateResolved_${id}`)); }); isFetchingBatch = false; }
+            onerror: () => { 
+                idsToFetch.forEach(id => { 
+                    pendingSteamIDs.delete(id); 
+                    document.dispatchEvent(new Event(`SteamDateResolved_${id}`)); 
+                }); 
+                isFetchingBatch = false;
+                triggerSteamFetch();
+            }
         });
-    }, 500);
+    }
 
     let insaneDatabaseCache = null;
     let isFetchingInsane = false;
@@ -357,7 +380,12 @@
 
             function drawDateComparison() {
                 const dataSteam = steamDateCache[modId];
-                if (!dataSteam) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`; pendingSteamIDs.add(modId); return; }
+                if (!dataSteam) { 
+                    container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`; 
+                    pendingSteamIDs.add(modId); 
+                    triggerSteamFetch(); // Avisa a fila que tem um novo mod pra checar a data
+                    return; 
+                }
 
                 const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
                 const strSteam = (dataSteam && dataSteam !== 'NO_DATE') ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
@@ -388,17 +416,17 @@
         });
     }
 
-    setInterval(() => {
+    // --- NOVA LÓGICA DE MUTATION OBSERVER (Substitui o setInterval do DOM) ---
+    function injectWidgets() {
         if (!isParalivesPage()) return;
 
+        // 1. Página Principal do Mod
         if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
             const subscribeControls = steamBtn ? steamBtn.parentElement : null;
 
             if (modId && subscribeControls && !document.getElementById('insane-widget-main')) {
-                
-                // Conserta a caixa pai da Steam para que o botão não vaze para fora em idiomas de texto longo
                 const gameArea = subscribeControls.parentElement;
                 if (gameArea && gameArea.classList.contains('game_area_purchase_game')) {
                     gameArea.style.display = 'flex';
@@ -416,7 +444,6 @@
                     }
                 }
 
-                // Ajusta o próprio container de botões para organizar lado a lado ou quebrar linha de forma fluída
                 subscribeControls.style.float = 'none';
                 subscribeControls.style.display = 'flex';
                 subscribeControls.style.flexWrap = 'wrap';
@@ -434,6 +461,7 @@
             }
         }
 
+        // 2. Modais e Popups
         document.querySelectorAll('h2 a[href*="sharedfiles/filedetails/?id="]').forEach(titleLink => {
             let modalRoot = titleLink;
             for(let i = 0; i < 6; i++) { if(modalRoot.parentElement) modalRoot = modalRoot.parentElement; }
@@ -453,6 +481,7 @@
             }
         });
 
+        // 3. Grid de Cards / Lupas
         document.querySelectorAll('.SVGIcon_MagnifyingGlass').forEach(zoomIcon => {
             const actionRow = (zoomIcon.closest('[role="button"]') || zoomIcon.parentElement)?.parentElement;
             if (!actionRow || actionRow.querySelector('.insane-widget-container')) return;
@@ -479,6 +508,30 @@
             const modId = new URL(modLink.href).searchParams.get('id');
             if (modId) renderWidget(container, modId, true);
         });
+    }
 
-    }, 1000);
+    // Debounce para evitar múltiplas execuções quando vários elementos forem renderizados ao mesmo tempo
+    let domCheckTimeout;
+    const observer = new MutationObserver((mutations) => {
+        let shouldCheck = false;
+        for (const mutation of mutations) {
+            // Só precisamos verificar se novos nós foram adicionados ao DOM
+            if (mutation.addedNodes.length > 0) {
+                shouldCheck = true;
+                break;
+            }
+        }
+        
+        if (shouldCheck) {
+            clearTimeout(domCheckTimeout);
+            domCheckTimeout = setTimeout(injectWidgets, 150);
+        }
+    });
+
+    // Inicia o Observer em todo o corpo da página
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // Garante que rodamos o construtor uma vez caso a página já tenha elementos renderizados
+    injectWidgets();
+
 })();
