@@ -7,6 +7,7 @@
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/3450310/workshop/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Europa%20Universalis%20V%20-%20Steam%20Workshop%20Direct%20Download.user.js
@@ -186,9 +187,22 @@
                 }
             }
 
-            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" target="_blank" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
+            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
+            return;
+        }
+
+        // Recuperado o manipulador GM_openInTab para evitar bloqueios de pop-up
+        const insaneLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
+        if (insaneLink && insaneLink.hasAttribute('href')) {
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            GM_openInTab(insaneLink.href, { active: false, insert: true });
+            
+            if (dropdownGlobal.classList.contains('show')) {
+                dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
+            }
             return;
         }
 
@@ -487,7 +501,7 @@
         fetchInsaneData((db) => {
             if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
             if (!db[modId]) {
-                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
+                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
                 
                 const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
@@ -550,10 +564,10 @@
                 const strSteam = (dataSteam && dataSteam !== 'NO_DATE') ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
 
                 if (dataSteam === 'NO_DATE' || !dataInsane || dataInsane >= dataSteam) {
-                    container.innerHTML = `<a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
+                    container.innerHTML = `<a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
                     bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else {
-                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 }
             }
