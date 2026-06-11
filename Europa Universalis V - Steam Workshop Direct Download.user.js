@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -118,6 +118,21 @@
         GM_openInTab(url, { active: false, insert: true });
     }
 
+    // Remove href/target de todos os <a> dentro de `el` e substitui pela
+    // navegação via GM_openInTab — elimina qualquer abertura nativa do browser.
+    function patchLinks(el) {
+        el.querySelectorAll('a[href]').forEach(a => {
+            const url = a.getAttribute('href');
+            a.removeAttribute('href');
+            a.removeAttribute('target');
+            a.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openInBackground(url);
+            });
+        });
+    }
+
     const style = document.createElement('style');
     style.innerHTML = `
         .insane-custom-btn { display: inline-flex !important; align-items: center !important; justify-content: center !important; padding: 0 15px !important; font-size: 13px !important; font-weight: bold !important; border-radius: 2px !important; text-decoration: none !important; white-space: nowrap !important; transition: all 0.2s ease-in-out !important; box-sizing: border-box !important; font-family: "Motiva Sans", Arial, Helvetica, sans-serif !important; box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important; gap: 8px !important; z-index: 99 !important; height: 34px !important; text-shadow: 1px 1px 2px rgba(0,0,0,0.5) !important; margin: 0 !important; }
@@ -205,20 +220,9 @@
             }
 
             dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" target="_blank" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
+            patchLinks(dropdownGlobal);
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
-            return;
-        }
-
-        // Abre links do script em segundo plano sem mudar o foco
-        const bgLink = e.target.closest('a.insane-custom-btn[target="_blank"], a.insane-bg-link[target="_blank"]');
-        if (bgLink) {
-            e.preventDefault();
-            e.stopPropagation();
-            openInBackground(bgLink.href);
-            if (dropdownGlobal.classList.contains('show')) {
-                dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
-            }
             return;
         }
 
