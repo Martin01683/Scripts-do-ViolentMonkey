@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -73,9 +73,6 @@
     `;
     document.head.appendChild(style);
 
-    // ==========================================
-    // MENU DROPDOWN - CÁLCULO ABSOLUTO (FIX)
-    // ==========================================
     const dropdownGlobal = document.createElement('div');
     dropdownGlobal.className = 'insane-global-dropdown';
 
@@ -95,7 +92,8 @@
             let topPos = rect.bottom;
             let leftPos = rect.right - 220;
 
-            // Se estiver num pop-up (dialog), compensamos a distorção nativa do navegador
+            // Dialogs com transform aplicado distorcem as coordenadas do getBoundingClientRect,
+            // então compensamos subtraindo a posição do próprio dialog.
             if (dialogParent) {
                 dialogParent.appendChild(dropdownGlobal);
                 const style = window.getComputedStyle(dialogParent);
@@ -139,9 +137,6 @@
         dropdownGlobal.lastArrow = null;
     }, { passive: true });
 
-    // ==========================================
-    // ENGINE DE TOOLTIP (FIX POSIÇÃO)
-    // ==========================================
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
     let hoverTimer;
@@ -185,13 +180,12 @@
         });
     }
 
-    // ==========================================
-    // ENGINE STEAM E INSANE API
-    // ==========================================
     let steamDateCache = {};
     let pendingSteamIDs = new Set();
     let isFetchingBatch = false;
 
+    // A API da Steam aceita até 100 IDs por requisição, então acumulamos os IDs
+    // conforme novos cards aparecem no DOM e os enviamos em lotes.
     setInterval(() => {
         if (!isParalivesPage()) return; 
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
@@ -314,20 +308,17 @@
         });
     }
 
-    // ==========================================
-    // INJEÇÃO - PÁGINA PRINCIPAL E MODAL (LADO A LADO FIX)
-    // ==========================================
-    const injectUI = setInterval(() => {
+    // Roda a cada 1s para detectar novos cards injetados pelo infinite scroll da Steam.
+    setInterval(() => {
         if (!isParalivesPage()) return;
         
-        // 1. INJEÇÃO NA PÁGINA PRINCIPAL
         if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
             const subscribeControls = steamBtn ? steamBtn.parentElement : null;
 
             if (modId && subscribeControls && !document.getElementById('insane-widget-main')) {
-                // Impede que a caixa da Steam jogue nosso botão pra baixo
+                // Força flex no container da Steam para evitar que nosso botão quebre linha.
                 subscribeControls.style.display = 'flex';
                 subscribeControls.style.flexWrap = 'nowrap';
                 subscribeControls.style.alignItems = 'center';
@@ -335,12 +326,11 @@
 
                 const container = document.createElement('div');
                 container.id = 'insane-widget-main';
-                steamBtn.insertAdjacentElement('beforebegin', container); // Cola logo antes do verde
+                steamBtn.insertAdjacentElement('beforebegin', container);
                 renderWidget(container, modId, false);
             }
         }
 
-        // 2. INJEÇÃO NO MODAL POP-UP (Apenas tela escura)
         document.querySelectorAll('h2 a[href*="sharedfiles/filedetails/?id="]').forEach(titleLink => {
             let modalRoot = titleLink;
             for(let i = 0; i < 6; i++) { if(modalRoot.parentElement) modalRoot = modalRoot.parentElement; }
@@ -348,12 +338,11 @@
             const subscribeBtn = Array.from(modalRoot.querySelectorAll('button')).find(b => b.getAttribute('data-accent-color') === 'green' || b.querySelector('.SVGIcon_Plus'));
             if (!subscribeBtn) return;
             
-            // Pega a "caixa" do botão verde e cola a nossa exatamente do lado dela!
             const anchor = subscribeBtn.closest('.tool-tip-source') || subscribeBtn;
             if (!anchor.parentElement.querySelector('.insane-widget-container')) {
                 const container = document.createElement('div');
                 container.className = 'insane-widget-container';
-                container.style.marginRight = '8px'; // Afasta um pouquinho do botão verde
+                container.style.marginRight = '8px';
                 
                 anchor.insertAdjacentElement('beforebegin', container);
                 const modId = new URL(titleLink.href).searchParams.get('id');
@@ -361,7 +350,6 @@
             }
         });
 
-        // 3. INJEÇÃO NAS LISTAS E CARDS (Lupas)
         document.querySelectorAll('.SVGIcon_MagnifyingGlass').forEach(zoomIcon => {
             const actionRow = (zoomIcon.closest('[role="button"]') || zoomIcon.parentElement)?.parentElement;
             if (!actionRow || actionRow.querySelector('.insane-widget-container')) return;
