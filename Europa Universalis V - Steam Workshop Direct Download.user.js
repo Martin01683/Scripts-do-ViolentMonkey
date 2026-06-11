@@ -204,14 +204,45 @@
     if (typeof tooltipGlobal.showPopover === 'function') tooltipGlobal.setAttribute('popover', 'manual');
     let hoverTimer;
 
-    // Atualizador de tempo real do tooltip
+    // --- MOTOR EM TEMPO REAL: TOOLTIP E AUTO-REFRESH ---
     setInterval(() => {
-        if (!tooltipGlobal.classList.contains('show')) return;
-        const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
-        countdowns.forEach(el => {
-            const exp = parseInt(el.getAttribute('data-exp'), 10);
-            if (exp) el.innerText = formatTimeLeft(exp);
-        });
+        // 1. Atualiza tooltips abertos
+        if (tooltipGlobal.classList.contains('show')) {
+            const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
+            countdowns.forEach(el => {
+                const exp = parseInt(el.getAttribute('data-exp'), 10);
+                if (exp) el.innerText = formatTimeLeft(exp);
+            });
+        }
+
+        // 2. Rechecagem automática APENAS se a aba estiver visível/ativa
+        if (!document.hidden) {
+            const now = Date.now();
+            let dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
+
+            // Percorre todos os widgets ativos na tela
+            document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
+                const modId = container.dataset.modid;
+                const isCard = container.dataset.iscard === 'true';
+                
+                if (modId) {
+                    let steamExpired = localSteamCache[modId] ? (now >= localSteamCache[modId].exp) : false;
+
+                    // Se expirou E não está já no meio de uma requisição ("Buscando...")
+                    if ((dbExpired || steamExpired) && !container.querySelector('.insane-state-loading')) {
+                        
+                        // Proteção visual: se o mouse estava no botão no momento do reset, oculta o tooltip temporariamente para evitar falhas
+                        if (container.matches(':hover')) {
+                            tooltipGlobal.classList.remove('show');
+                            safeHidePopover(tooltipGlobal);
+                        }
+                        
+                        // Roda a checagem novamente
+                        renderWidget(container, modId, isCard);
+                    }
+                }
+            });
+        }
     }, 1000);
 
     function bindTooltip(element, htmlContent) {
@@ -551,8 +582,12 @@
 
                 const container = document.createElement('div');
                 container.id = 'insane-widget-main';
-                steamBtn.insertAdjacentElement('beforebegin', container);
                 
+                // Salvando ID e Tipo no container para o Auto-Refresh usar
+                container.dataset.modid = modId;
+                container.dataset.iscard = 'false';
+                
+                steamBtn.insertAdjacentElement('beforebegin', container);
                 stopCardNav(container);
                 renderWidget(container, modId, false);
             }
@@ -569,11 +604,14 @@
             if (!anchor.parentElement.querySelector('.insane-widget-container')) {
                 const container = document.createElement('div'); container.className = 'insane-widget-container'; container.style.marginRight = '8px';
                 
+                // Salvando ID e Tipo no container para o Auto-Refresh usar
+                container.dataset.modid = new URL(titleLink.href).searchParams.get('id');
+                container.dataset.iscard = 'false';
+
                 stopCardNav(container);
-                
                 anchor.insertAdjacentElement('beforebegin', container);
-                const modId = new URL(titleLink.href).searchParams.get('id');
-                if (modId) renderWidget(container, modId, false);
+                
+                if (container.dataset.modid) renderWidget(container, container.dataset.modid, false);
             }
         });
 
@@ -595,12 +633,14 @@
 
             const container = document.createElement('div'); container.className = 'insane-widget-container';
             
+            // Salvando ID e Tipo no container para o Auto-Refresh usar
+            container.dataset.modid = new URL(modLink.href).searchParams.get('id');
+            container.dataset.iscard = 'true';
+
             stopCardNav(container);
-            
             actionRow.prepend(container);
 
-            const modId = new URL(modLink.href).searchParams.get('id');
-            if (modId) renderWidget(container, modId, true);
+            if (container.dataset.modid) renderWidget(container, container.dataset.modid, true);
         });
     }
 
