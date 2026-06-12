@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -20,6 +20,10 @@
     const PARALIVES_APPID = '1118520';
     const CACHE_TIME_MS = 10 * 60 * 1000; // 10 minutos
 
+    // Sentinels para o cache da Steam
+    const STEAM_NO_DATE     = 'NO_DATE';
+    const STEAM_FETCH_ERROR = 'FETCH_ERROR';
+
     const t = document.documentElement.lang.toLowerCase().startsWith('pt') ? {
         loading:         '⏳ Buscando...',
         checkingVersion: '⏳ Checando Versão...',
@@ -33,6 +37,13 @@
         requestUpdate:   'Pedir Atualização no Fórum',
         labelSteam:      'Steam:',
         labelInsane:     'Insane:',
+        labelCache:      'Status do Cache:',
+        cacheSteam:      'Steam:',
+        cacheDB:         'Banco de Dados:',
+        justNow:         'agora',
+        minAgo:          'min atrás',
+        steamError:      '⚠️ Sem Verificar',
+        steamErrorTip:   'Falha na API Steam. Versão não verificada.'
     } : {
         loading:         '⏳ Loading...',
         checkingVersion: '⏳ Checking Version...',
@@ -46,7 +57,30 @@
         requestUpdate:   'Request Update on Forum',
         labelSteam:      'Steam:',
         labelInsane:     'Insane:',
+        labelCache:      'Cache Status:',
+        cacheSteam:      'Steam:',
+        cacheDB:         'Database:',
+        justNow:         'just now',
+        minAgo:          'min ago',
+        steamError:      '⚠️ Unverified',
+        steamErrorTip:   'Steam API unreachable. Version not verified.'
     };
+
+    function formatCacheAge(ms) {
+        if (!ms || ms < 0 || isNaN(ms)) ms = 0;
+        const minutes = Math.floor(ms / 60000);
+        if (minutes < 1) return t.justNow;
+        return `${minutes} ${t.minAgo}`;
+    }
+
+    function formatTimeLeft(expTimestamp) {
+        if (!expTimestamp) return "0s";
+        const left = expTimestamp - Date.now();
+        if (left <= 0) return "0s";
+        const m = Math.floor(left / 60000);
+        const s = Math.floor((left % 60000) / 1000);
+        return `${m}m ${s}s`;
+    }
 
     function isParalivesPage() {
         const url = window.location.href;
@@ -61,11 +95,20 @@
         } catch(e) {
             if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
                 try {
-                    localStorage.removeItem(key); 
+                    localStorage.removeItem(key);
                     localStorage.setItem(key, JSON.stringify(dataObj));
-                } catch(err) {} 
+                } catch(err) {}
             }
         }
+    }
+
+    function stopCardNav(el) {
+        const stop = (e) => e.stopPropagation();
+        el.addEventListener('click',       stop);
+        el.addEventListener('mousedown',   stop);
+        el.addEventListener('mouseup',     stop);
+        el.addEventListener('pointerdown', stop);
+        el.addEventListener('pointerup',   stop);
     }
 
     const style = document.createElement('style');
@@ -131,12 +174,34 @@
     dropdownGlobal.className = 'insane-global-dropdown';
     if (typeof dropdownGlobal.showPopover === 'function') dropdownGlobal.setAttribute('popover', 'manual');
 
-    // MUDANÇA AQUI: Adicionado 'true' no final do AddEventListener para ele atuar na "Fase de Captura" (Capturing Phase).
-    // Isso garante que ele escute os botões antes dos containers anularem a propagação para bloquear a Steam.
     document.addEventListener('click', (e) => {
+        if (!isParalivesPage()) return; // TRAVA DE SEGURANÇA
+
+        const scriptLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
+        if (scriptLink && scriptLink.hasAttribute('href')) {
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                if (typeof GM_openInTab === 'function') {
+                    GM_openInTab(scriptLink.href, { active: false, insert: true });
+                } else {
+                    window.open(scriptLink.href, '_blank', 'noopener');
+                }
+
+                if (scriptLink.classList.contains('insane-bg-link') && dropdownGlobal.classList.contains('show')) {
+                    dropdownGlobal.classList.remove('show');
+                    safeHidePopover(dropdownGlobal);
+                    dropdownGlobal.lastArrow = null;
+                }
+                return;
+            }
+        }
+
         const arrowBtn = e.target.closest('.insane-btn-arrow');
         if (arrowBtn) {
-            e.preventDefault(); e.stopPropagation(); // Anula aqui mesmo!
+            e.preventDefault(); e.stopPropagation();
             if (dropdownGlobal.classList.contains('show') && dropdownGlobal.lastArrow === arrowBtn) {
                 dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
                 return;
@@ -156,46 +221,80 @@
                 }
             }
 
-            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
+            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
-            return;
-        }
-
-        const insaneLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
-        if (insaneLink && insaneLink.href) {
-            e.preventDefault(); e.stopPropagation(); // Anula aqui mesmo para Steam não ver
-            GM_openInTab(insaneLink.href, { active: false, insert: true });
-            dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
             return;
         }
 
         if (!e.target.closest('.insane-global-dropdown') && dropdownGlobal.classList.contains('show')) {
             dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
         }
-    }, true); 
+    }, true);
 
-    window.addEventListener('scroll', () => { dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; }, { passive: true });
+    window.addEventListener('scroll', () => { 
+        if (!isParalivesPage()) return; // TRAVA DE SEGURANÇA
+        dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
+    }, { passive: true });
 
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
     if (typeof tooltipGlobal.showPopover === 'function') tooltipGlobal.setAttribute('popover', 'manual');
     let hoverTimer;
 
+    // --- MOTOR EM TEMPO REAL: TOOLTIP E AUTO-REFRESH ---
+    setInterval(() => {
+        if (!isParalivesPage()) return; // TRAVA DE SEGURANÇA
+
+        if (tooltipGlobal.classList.contains('show')) {
+            const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
+            countdowns.forEach(el => {
+                const exp = parseInt(el.getAttribute('data-exp'), 10);
+                if (exp) el.innerText = formatTimeLeft(exp);
+            });
+        }
+
+        if (!document.hidden) {
+            const now = Date.now();
+            const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
+
+            if (dbExpired) {
+                insaneDatabaseCache = null;
+            }
+
+            document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
+                const modId  = container.dataset.modid;
+                const isCard = container.dataset.iscard === 'true';
+
+                if (modId) {
+                    const steamExpired = localSteamCache[modId]
+                        ? (now >= localSteamCache[modId].exp)
+                        : false;
+
+                    if (steamExpired) {
+                        delete steamDateCache[modId];
+                    }
+
+                    if ((dbExpired || steamExpired) && !container.querySelector('.insane-state-loading')) {
+                        if (container.matches(':hover')) {
+                            tooltipGlobal.classList.remove('show');
+                            safeHidePopover(tooltipGlobal);
+                        }
+                        renderWidget(container, modId, isCard);
+                    }
+                }
+            });
+        }
+    }, 1000);
+
     function bindTooltip(element, htmlContent) {
-        element.addEventListener('mouseenter', () => {
-            hoverTimer = setTimeout(() => {
-                const dialogParent = element.closest('dialog');
-                if (dialogParent) dialogParent.appendChild(tooltipGlobal); else document.body.appendChild(tooltipGlobal);
-                tooltipGlobal.innerHTML = htmlContent;
-                tooltipGlobal.classList.add('show'); safeShowPopover(tooltipGlobal);
-            }, 300);
-        });
-        element.addEventListener('mousemove', (e) => {
-            let left = e.clientX + 15, top = e.clientY + 15;
+        let lastX = 0, lastY = 0;
+
+        const updatePos = () => {
+            let left = lastX + 15, top = lastY + 15;
             const tooltipWidth = tooltipGlobal.offsetWidth || 200, tooltipHeight = tooltipGlobal.offsetHeight || 100;
-            if (left + tooltipWidth > window.innerWidth - 10) left = e.clientX - tooltipWidth - 15;
-            if (top + tooltipHeight > window.innerHeight - 10) top = e.clientY - tooltipHeight - 15;
+            if (left + tooltipWidth > window.innerWidth - 10) left = lastX - tooltipWidth - 15;
+            if (top + tooltipHeight > window.innerHeight - 10) top = lastY - tooltipHeight - 15;
             if (typeof tooltipGlobal.showPopover !== 'function') {
                 const dialogParent = element.closest('dialog');
                 if (dialogParent && window.getComputedStyle(dialogParent).transform !== 'none') {
@@ -203,17 +302,37 @@
                 }
             }
             tooltipGlobal.style.left = left + 'px'; tooltipGlobal.style.top = top + 'px';
+        };
+
+        element.addEventListener('mouseenter', (e) => {
+            lastX = e.clientX; lastY = e.clientY;
+            hoverTimer = setTimeout(() => {
+                const dialogParent = element.closest('dialog');
+                if (dialogParent) dialogParent.appendChild(tooltipGlobal); else document.body.appendChild(tooltipGlobal);
+                tooltipGlobal.innerHTML = htmlContent;
+                tooltipGlobal.classList.add('show');
+                safeShowPopover(tooltipGlobal);
+                updatePos();
+            }, 300);
         });
-        element.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); tooltipGlobal.classList.remove('show'); safeHidePopover(tooltipGlobal, 100); });
+
+        element.addEventListener('mousemove', (e) => {
+            lastX = e.clientX; lastY = e.clientY;
+            if (tooltipGlobal.classList.contains('show')) updatePos();
+        });
+
+        element.addEventListener('mouseleave', () => {
+            clearTimeout(hoverTimer);
+            tooltipGlobal.classList.remove('show');
+            safeHidePopover(tooltipGlobal, 100);
+        });
     }
 
-    // --- SISTEMA DE CACHE: STEAM API ---
-    let steamDateCache = {};
+    let steamDateCache  = {};
     let localSteamCache = {};
     let pendingSteamIDs = new Set();
     let isFetchingBatch = false;
     let steamQueueTimeout = null;
-
     let steamCallbacks = new Map();
 
     try {
@@ -223,7 +342,7 @@
             const now = Date.now();
             let changed = false;
             for (const id in parsed) {
-                if (now < parsed[id].exp) {
+                if (parsed[id] && parsed[id].exp && now < parsed[id].exp) {
                     localSteamCache[id] = parsed[id];
                 } else {
                     changed = true;
@@ -243,7 +362,7 @@
     function processSteamQueue() {
         if (!isParalivesPage()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
-        
+
         isFetchingBatch = true;
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
         let dataString = `itemcount=${idsToFetch.length}`;
@@ -262,12 +381,12 @@
                             if (details.publishedfileid) {
                                 const id = details.publishedfileid;
                                 const timestamp = details.time_updated || details.time_created;
-                                const dateVal = timestamp ? new Date(timestamp * 1000) : 'NO_DATE';
-                                
+                                const dateVal = timestamp ? new Date(timestamp * 1000) : STEAM_NO_DATE;
+
                                 steamDateCache[id] = dateVal;
-                                localSteamCache[id] = { 
-                                    date: dateVal === 'NO_DATE' ? 'NO_DATE' : dateVal.toISOString(), 
-                                    exp: now + CACHE_TIME_MS 
+                                localSteamCache[id] = {
+                                    date: dateVal === STEAM_NO_DATE ? STEAM_NO_DATE : dateVal.toISOString(),
+                                    exp: now + CACHE_TIME_MS
                                 };
                                 handledIds.add(id);
                             }
@@ -275,48 +394,60 @@
                     }
                 } catch(e) {}
 
-                idsToFetch.forEach(id => { 
+                idsToFetch.forEach(id => {
                     if (!handledIds.has(id)) {
-                        steamDateCache[id] = 'NO_DATE';
-                        localSteamCache[id] = { date: 'NO_DATE', exp: now + CACHE_TIME_MS };
+                        steamDateCache[id] = STEAM_NO_DATE;
+                        localSteamCache[id] = { date: STEAM_NO_DATE, exp: now + CACHE_TIME_MS };
                     }
                     pendingSteamIDs.delete(id);
-                    
+
                     if (steamCallbacks.has(id)) {
                         steamCallbacks.get(id).forEach(cb => cb());
                         steamCallbacks.delete(id);
                     }
                 });
-                
+
                 saveCacheSafely('Paralives_SteamCache', localSteamCache);
                 isFetchingBatch = false; triggerSteamFetch();
             },
-            onerror: () => { 
-                idsToFetch.forEach(id => { 
-                    pendingSteamIDs.delete(id); 
+            onerror: () => {
+                const now = Date.now();
+                idsToFetch.forEach(id => {
+                    steamDateCache[id] = STEAM_FETCH_ERROR;
+                    localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_MS };
+                    pendingSteamIDs.delete(id);
+
                     if (steamCallbacks.has(id)) {
                         steamCallbacks.get(id).forEach(cb => cb());
                         steamCallbacks.delete(id);
                     }
-                }); 
+                });
+                saveCacheSafely('Paralives_SteamCache', localSteamCache);
                 isFetchingBatch = false; triggerSteamFetch();
             }
         });
     }
 
-    // --- SISTEMA DE CACHE: INSANE DB ---
     let insaneDatabaseCache = null;
-    let isFetchingInsane = false;
-    let fetchQueue = [];
+    let insaneCacheAgeMs   = 0;
+    let insaneCacheExp     = 0;
+    let isFetchingInsane   = false;
+    let fetchQueue         = [];
 
     function extractJsonArray(text, variableName) {
+        try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) return text;
+            if (parsed[variableName]) return JSON.stringify(parsed[variableName]);
+        } catch (e) {}
+
         const regex = new RegExp(`(?:const|let|var)\\s+${variableName}\\s*=\\s*\\[`);
         const match = text.match(regex);
         if (!match) return null;
-        
+
         const startIdx = match.index + match[0].length - 1;
         let depth = 0;
-        
+
         for (let i = startIdx; i < text.length; i++) {
             if (text[i] === '[') depth++;
             else if (text[i] === ']') {
@@ -328,14 +459,19 @@
     }
 
     function fetchInsaneData(callback) {
-        if (insaneDatabaseCache !== null) { callback(insaneDatabaseCache); return; }
-        
+        if (insaneDatabaseCache !== null && Date.now() < insaneCacheExp) {
+            callback(insaneDatabaseCache);
+            return;
+        }
+
         try {
             const stored = localStorage.getItem('Paralives_InsaneCache');
             if (stored) {
                 const parsed = JSON.parse(stored);
-                if (Date.now() < parsed.exp) {
+                if (parsed && parsed.data && parsed.exp && Date.now() < parsed.exp) {
                     insaneDatabaseCache = parsed.data;
+                    insaneCacheAgeMs   = Date.now() - (parsed.exp - CACHE_TIME_MS);
+                    insaneCacheExp     = parsed.exp;
                     callback(insaneDatabaseCache);
                     return;
                 }
@@ -350,6 +486,8 @@
             method: "GET", url: "https://insane.x10.mx/paralives.php?_t=" + Date.now(),
             onload: function(response) {
                 insaneDatabaseCache = {};
+                insaneCacheAgeMs   = 0;
+                insaneCacheExp     = 0;
                 try {
                     const jsonString = extractJsonArray(response.responseText, 'allMods');
                     if (jsonString) {
@@ -360,24 +498,29 @@
                             }
                         });
 
+                        insaneCacheExp = Date.now() + CACHE_TIME_MS;
                         saveCacheSafely('Paralives_InsaneCache', {
                             data: insaneDatabaseCache,
-                            exp: Date.now() + CACHE_TIME_MS
+                            exp:  insaneCacheExp
                         });
                     }
-                } catch (e) { console.error("Erro no parser da Insane DB", e); }
-                
+                } catch (e) {}
+
                 fetchQueue.forEach(cb => cb(insaneDatabaseCache)); fetchQueue = [];
                 isFetchingInsane = false;
             },
-            onerror: () => { 
-                fetchQueue.forEach(cb => cb(null)); fetchQueue = []; 
+            onerror: () => {
+                fetchQueue.forEach(cb => cb(null)); fetchQueue = [];
                 isFetchingInsane = false;
             }
         });
     }
 
-    function parseDataInsane(dataString) { return dataString ? new Date(dataString.replace(' ', 'T') + '+01:00') : null; }
+    function parseDataInsane(dataString) {
+        if (!dataString || dataString.startsWith('0000-00-00')) return null;
+        const d = new Date(dataString.replace(' ', 'T') + '+01:00');
+        return isNaN(d.getTime()) ? null : d;
+    }
 
     function renderWidget(container, modId, isCard) {
         const cClass = isCard ? 'insane-custom-btn-compact' : '';
@@ -386,44 +529,80 @@
         fetchInsaneData((db) => {
             if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
             if (!db[modId]) {
-                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
-                bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>`);
+                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
+
+                const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
+                const strInsaneReset = formatTimeLeft(insaneCacheExp);
+                const cacheInfoHtml = `
+                    <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
+                        <div class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} ${strInsaneCache} (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</div>
+                    </div>`;
+
+                bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${cacheInfoHtml}`);
                 return;
             }
 
-            const modData = db[modId];
+            const modData   = db[modId];
             const dataInsane = parseDataInsane(modData.uploaded);
 
             function drawDateComparison() {
                 let dataSteam = steamDateCache[modId];
 
-                if (!dataSteam && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
+                if (dataSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
                     const cachedVal = localSteamCache[modId].date;
-                    dataSteam = steamDateCache[modId] = (cachedVal === 'NO_DATE') ? 'NO_DATE' : new Date(cachedVal);
+                    dataSteam = steamDateCache[modId] =
+                        (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR)
+                            ? cachedVal
+                            : new Date(cachedVal);
                 }
 
-                if (!dataSteam) { 
-                    container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`; 
-                    pendingSteamIDs.add(modId); 
-                    
-                    if (!steamCallbacks.has(modId)) {
-                        steamCallbacks.set(modId, []);
-                    }
-                    steamCallbacks.get(modId).push(drawDateComparison);
+                if (dataSteam === undefined) {
+                    container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`;
+                    pendingSteamIDs.add(modId);
 
-                    triggerSteamFetch(); 
-                    return; 
+                    if (!steamCallbacks.has(modId)) steamCallbacks.set(modId, new Set());
+                    steamCallbacks.get(modId).add(drawDateComparison);
+
+                    triggerSteamFetch();
+                    return;
                 }
+
+                let steamCacheAgeMs = 0;
+                let steamCacheExp   = 0;
+                if (localSteamCache[modId] && localSteamCache[modId].exp) {
+                    steamCacheAgeMs = Date.now() - (localSteamCache[modId].exp - CACHE_TIME_MS);
+                    steamCacheExp   = localSteamCache[modId].exp;
+                }
+
+                const strSteamCache  = formatCacheAge(steamCacheAgeMs);
+                const strSteamReset  = formatTimeLeft(steamCacheExp);
+                const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
+                const strInsaneReset = formatTimeLeft(insaneCacheExp);
+
+                const cacheInfoHtml = `
+                    <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheSteam} ${strSteamCache} (🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>)</span>
+                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} ${strInsaneCache} (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</span>
+                        </div>
+                    </div>`;
 
                 const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
-                const strSteam = (dataSteam && dataSteam !== 'NO_DATE') ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
+                const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR)
+                    ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
+                    : 'N/A';
 
-                if (dataSteam === 'NO_DATE' || !dataInsane || dataInsane >= dataSteam) {
-                    container.innerHTML = `<a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
-                    bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>`);
+                if (dataSteam === STEAM_FETCH_ERROR) {
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow">▼</button></div>`;
+                    bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
+                } else if (dataSteam === STEAM_NO_DATE || !dataInsane || dataInsane >= dataSteam) {
+                    container.innerHTML = `<a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
+                    bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else {
-                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
-                    bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>`);
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
+                    bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 }
             }
             drawDateComparison();
@@ -441,17 +620,36 @@
             if (modId && subscribeControls && !document.getElementById('insane-widget-main')) {
                 const gameArea = subscribeControls.parentElement;
                 if (gameArea && gameArea.classList.contains('game_area_purchase_game')) {
-                    gameArea.style.display = 'flex'; gameArea.style.flexWrap = 'wrap'; gameArea.style.alignItems = 'center'; gameArea.style.justifyContent = 'space-between'; gameArea.style.gap = '15px';
+                    gameArea.style.display         = 'flex';
+                    gameArea.style.flexWrap        = 'wrap';
+                    gameArea.style.alignItems      = 'center';
+                    gameArea.style.justifyContent  = 'space-between';
+                    gameArea.style.gap             = '15px';
                     const titleH1 = gameArea.querySelector('h1');
-                    if (titleH1) { titleH1.style.float = 'none'; titleH1.style.width = 'auto'; titleH1.style.flex = '1 1 auto'; titleH1.style.margin = '0'; }
+                    if (titleH1) {
+                        titleH1.style.float  = 'none';
+                        titleH1.style.width  = 'auto';
+                        titleH1.style.flex   = '1 1 auto';
+                        titleH1.style.margin = '0';
+                    }
                 }
 
-                subscribeControls.style.float = 'none'; subscribeControls.style.display = 'flex'; subscribeControls.style.flexWrap = 'wrap'; subscribeControls.style.alignItems = 'center'; subscribeControls.style.justifyContent = 'flex-end'; subscribeControls.style.gap = '10px';
-                steamBtn.style.flexShrink = '0'; steamBtn.style.margin = '0';
+                subscribeControls.style.float          = 'none';
+                subscribeControls.style.display        = 'flex';
+                subscribeControls.style.flexWrap       = 'wrap';
+                subscribeControls.style.alignItems     = 'center';
+                subscribeControls.style.justifyContent = 'flex-end';
+                subscribeControls.style.gap            = '10px';
+                steamBtn.style.flexShrink              = '0';
+                steamBtn.style.margin                  = '0';
 
                 const container = document.createElement('div');
-                container.id = 'insane-widget-main';
+                container.id             = 'insane-widget-main';
+                container.dataset.modid  = modId;
+                container.dataset.iscard = 'false';
+
                 steamBtn.insertAdjacentElement('beforebegin', container);
+                stopCardNav(container);
                 renderWidget(container, modId, false);
             }
         }
@@ -465,11 +663,16 @@
 
             const anchor = subscribeBtn.closest('.tool-tip-source') || subscribeBtn;
             if (!anchor.parentElement.querySelector('.insane-widget-container')) {
-                const container = document.createElement('div'); container.className = 'insane-widget-container'; container.style.marginRight = '8px';
-                container.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+                const container = document.createElement('div');
+                container.className      = 'insane-widget-container';
+                container.style.marginRight = '8px';
+                container.dataset.modid  = new URL(titleLink.href).searchParams.get('id');
+                container.dataset.iscard = 'false';
+
+                stopCardNav(container);
                 anchor.insertAdjacentElement('beforebegin', container);
-                const modId = new URL(titleLink.href).searchParams.get('id');
-                if (modId) renderWidget(container, modId, false);
+
+                if (container.dataset.modid) renderWidget(container, container.dataset.modid, false);
             }
         });
 
@@ -486,15 +689,21 @@
             }
             if (!modLink || modLink.parentElement.tagName === 'H2') return;
 
-            actionRow.style.setProperty('opacity', '1', 'important'); actionRow.style.setProperty('visibility', 'visible', 'important');
-            actionRow.style.display = 'flex'; actionRow.style.alignItems = 'center'; actionRow.style.gap = '6px';
+            actionRow.style.setProperty('opacity',    '1', 'important');
+            actionRow.style.setProperty('visibility', 'visible', 'important');
+            actionRow.style.display    = 'flex';
+            actionRow.style.alignItems = 'center';
+            actionRow.style.gap        = '6px';
 
-            const container = document.createElement('div'); container.className = 'insane-widget-container';
-            container.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+            const container = document.createElement('div');
+            container.className      = 'insane-widget-container';
+            container.dataset.modid  = new URL(modLink.href).searchParams.get('id');
+            container.dataset.iscard = 'true';
+
+            stopCardNav(container);
             actionRow.prepend(container);
 
-            const modId = new URL(modLink.href).searchParams.get('id');
-            if (modId) renderWidget(container, modId, true);
+            if (container.dataset.modid) renderWidget(container, container.dataset.modid, true);
         });
     }
 
@@ -510,7 +719,7 @@
             }
             if (hasElementNodes) break;
         }
-        
+
         if (hasElementNodes) {
             clearTimeout(domCheckTimeout);
             domCheckTimeout = setTimeout(injectWidgets, 150);
