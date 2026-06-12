@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.10
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -175,7 +175,7 @@
     if (typeof dropdownGlobal.showPopover === 'function') dropdownGlobal.setAttribute('popover', 'manual');
 
     document.addEventListener('click', (e) => {
-        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+        if (!isEU5Page()) return; 
 
         const scriptLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
         if (scriptLink && scriptLink.hasAttribute('href')) {
@@ -233,7 +233,7 @@
     }, true);
 
     window.addEventListener('scroll', () => { 
-        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+        if (!isEU5Page()) return;
         dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
     }, { passive: true });
 
@@ -242,16 +242,27 @@
     if (typeof tooltipGlobal.showPopover === 'function') tooltipGlobal.setAttribute('popover', 'manual');
     let hoverTimer;
 
+    // --- FUNÇÃO PARA ATUALIZAR TEMPOS EM TEMPO REAL ---
+    function refreshTooltipTimers() {
+        const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
+        countdowns.forEach(el => {
+            const exp = parseInt(el.getAttribute('data-exp'), 10);
+            if (exp) el.innerText = formatTimeLeft(exp);
+        });
+
+        const ages = tooltipGlobal.querySelectorAll('.insane-cache-age');
+        ages.forEach(el => {
+            const created = parseInt(el.getAttribute('data-created'), 10);
+            if (created) el.innerText = formatCacheAge(Date.now() - created);
+        });
+    }
+
     // --- MOTOR EM TEMPO REAL: TOOLTIP E AUTO-REFRESH ---
     setInterval(() => {
-        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+        if (!isEU5Page()) return; 
 
         if (tooltipGlobal.classList.contains('show')) {
-            const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
-            countdowns.forEach(el => {
-                const exp = parseInt(el.getAttribute('data-exp'), 10);
-                if (exp) el.innerText = formatTimeLeft(exp);
-            });
+            refreshTooltipTimers();
         }
 
         if (!document.hidden) {
@@ -309,7 +320,10 @@
             hoverTimer = setTimeout(() => {
                 const dialogParent = element.closest('dialog');
                 if (dialogParent) dialogParent.appendChild(tooltipGlobal); else document.body.appendChild(tooltipGlobal);
+                
                 tooltipGlobal.innerHTML = htmlContent;
+                refreshTooltipTimers(); // Evita o "pulo" visual atualizando antes de exibir
+
                 tooltipGlobal.classList.add('show');
                 safeShowPopover(tooltipGlobal);
                 updatePos();
@@ -429,7 +443,6 @@
     }
 
     let insaneDatabaseCache = null;
-    let insaneCacheAgeMs   = 0;
     let insaneCacheExp     = 0;
     let isFetchingInsane   = false;
     let fetchQueue         = [];
@@ -470,7 +483,6 @@
                 const parsed = JSON.parse(stored);
                 if (parsed && parsed.data && parsed.exp && Date.now() < parsed.exp) {
                     insaneDatabaseCache = parsed.data;
-                    insaneCacheAgeMs   = Date.now() - (parsed.exp - CACHE_TIME_MS);
                     insaneCacheExp     = parsed.exp;
                     callback(insaneDatabaseCache);
                     return;
@@ -486,7 +498,6 @@
             method: "GET", url: "https://insane.x10.mx/eu5.php?_t=" + Date.now(),
             onload: function(response) {
                 insaneDatabaseCache = {};
-                insaneCacheAgeMs   = 0;
                 insaneCacheExp     = 0;
                 try {
                     const jsonString = extractJsonArray(response.responseText, 'allMods');
@@ -528,15 +539,17 @@
 
         fetchInsaneData((db) => {
             if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
+            
             if (!db[modId]) {
                 container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
 
-                const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
+                const creationTimeInsane = insaneCacheExp ? (insaneCacheExp - CACHE_TIME_MS) : Date.now();
+                const strInsaneCache = formatCacheAge(Date.now() - creationTimeInsane);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
                 const cacheInfoHtml = `
                     <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
                         <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
-                        <div class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} ${strInsaneCache} (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</div>
+                        <div class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</div>
                     </div>`;
 
                 bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${cacheInfoHtml}`);
@@ -568,24 +581,25 @@
                     return;
                 }
 
-                let steamCacheAgeMs = 0;
-                let steamCacheExp   = 0;
+                let steamCacheExp = 0;
                 if (localSteamCache[modId] && localSteamCache[modId].exp) {
-                    steamCacheAgeMs = Date.now() - (localSteamCache[modId].exp - CACHE_TIME_MS);
-                    steamCacheExp   = localSteamCache[modId].exp;
+                    steamCacheExp = localSteamCache[modId].exp;
                 }
 
-                const strSteamCache  = formatCacheAge(steamCacheAgeMs);
+                const creationTimeSteam = steamCacheExp ? (steamCacheExp - CACHE_TIME_MS) : Date.now();
+                const creationTimeInsane = insaneCacheExp ? (insaneCacheExp - CACHE_TIME_MS) : Date.now();
+
+                const strSteamCache  = formatCacheAge(Date.now() - creationTimeSteam);
                 const strSteamReset  = formatTimeLeft(steamCacheExp);
-                const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
+                const strInsaneCache = formatCacheAge(Date.now() - creationTimeInsane);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
 
                 const cacheInfoHtml = `
                     <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
                         <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
                         <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheSteam} ${strSteamCache} (🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>)</span>
-                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} ${strInsaneCache} (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</span>
+                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheSteam} <span class="insane-cache-age" data-created="${creationTimeSteam}">${strSteamCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>)</span>
+                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</span>
                         </div>
                     </div>`;
 
