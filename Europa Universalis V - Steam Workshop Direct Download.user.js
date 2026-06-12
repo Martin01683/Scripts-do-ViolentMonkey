@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.16
+// @version      1.17
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -24,12 +24,10 @@
     function isEU5Page() {
         const url = window.location.href;
         
-        // Se a URL já entregar o jogo (browse ou app)
         if (url.includes(`appid=${EU5_APPID}`) || url.includes(`/app/${EU5_APPID}/`)) {
             return true;
         }
 
-        // Se estiver na página do Mod (sharedfiles ou workshop/filedetails), procura elementos estruturais seguros da Steam
         const targetElements = document.querySelector(`
             .breadcrumbs a[href*="/app/${EU5_APPID}"], 
             .apphub_sectionTab[href*="/app/${EU5_APPID}"], 
@@ -40,21 +38,12 @@
         return targetElements !== null;
     }
 
-    // --- 2. GUARDA DE ENTRADA (Early Return) ---
-    // Se a página NÃO for do EU5, encerramos a execução do script IMEDIATAMENTE aqui.
-    if (!isEU5Page()) {
-        return; 
-    }
+    if (!isEU5Page()) return; 
 
-    // ========================================================================
-    // SE O SCRIPT CHEGOU AQUI, ESTAMOS NO EUROPA UNIVERSALIS V
-    // ========================================================================
+    // --- TEMPOS DE CACHE ---
+    const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  
+    const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; 
 
-    // --- TEMPOS DE CACHE CONFIGURADOS INDIVIDUALMENTE ---
-    const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
-    const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
-
-    // Sentinels para o cache da Steam
     const STEAM_NO_DATE     = 'NO_DATE';
     const STEAM_FETCH_ERROR = 'FETCH_ERROR';
 
@@ -120,7 +109,6 @@
         return `${m}m ${s}s`;
     }
 
-    // --- SINCRONIZAÇÃO OTIMIZADA DE COOLDOWN ENTRE ABAS ---
     let globalCacheCooldown = parseInt(localStorage.getItem('EU5_CacheCooldown') || '0', 10);
 
     function setGlobalCacheCooldown(ms) {
@@ -231,7 +219,6 @@
     }
 
     document.addEventListener('click', (e) => {
-        // Botão de Limpar Cache
         const clearCacheBtn = e.target.closest('#insane-clear-cache');
         if (clearCacheBtn) {
             e.preventDefault();
@@ -239,26 +226,28 @@
             const now = Date.now();
             
             if (now >= globalCacheCooldown) {
-                setGlobalCacheCooldown(30000); // Trava de 30 segundos
+                setGlobalCacheCooldown(30000);
 
-                // Limpar Storages Globais
                 localStorage.removeItem('EU5_SteamCache');
                 localStorage.removeItem('EU5_InsaneCache');
                 
-                // Limpar Memória Local
                 insaneDatabaseCache = null;
                 insaneCacheExp = 0;
                 steamDateCache = {};
                 localSteamCache = {};
                 
+                // Melhoria Inteligente: Zerar as filas solta os callbacks engatados. 
+                // As requisições que já estão na rua não são mortas, e quando voltarem
+                // alimentarão os novos botões!
+                fetchQueue = [];
+                steamCallbacks.clear();
+                
                 updateDropdownCacheText();
 
-                // Esconder o menu imediatamente
                 dropdownGlobal.classList.remove('show');
                 safeHidePopover(dropdownGlobal);
                 dropdownGlobal.lastArrow = null;
                 
-                // Forçar recarga de todos os widgets na tela sem recarregar a página
                 document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
                     const modId  = container.dataset.modid;
                     const isCard = container.dataset.iscard === 'true';
@@ -312,7 +301,6 @@
                 }
             }
 
-            // Exibir pedido de mod apenas se for mod desatualizado/faltando
             const showForum = arrowBtn.getAttribute('data-show-forum') === 'true';
             const forumText = arrowBtn.classList.contains('insane-state-error') ? t.requestMod : t.requestUpdate;
 
@@ -332,7 +320,6 @@
         }
     }, true);
 
-    // Esconde o menu e tooltip instantaneamente se rolar a página
     window.addEventListener('scroll', () => { 
         if (dropdownGlobal.classList.contains('show')) {
             dropdownGlobal.classList.remove('show'); 
@@ -364,7 +351,6 @@
             if (created) el.innerText = formatCacheAge(Date.now() - created);
         });
 
-        // Atualiza a interface de inatividade visual
         const idleStatusEl = tooltipGlobal.querySelector('.insane-idle-status');
         if (idleStatusEl) {
             const idleTextHtml = (isIdleNow() || wasIdleRecently) 
@@ -376,9 +362,7 @@
 
     let globalCacheCleared = false;
 
-    // Monitora a limpeza do cache e os blocos efetuados em abas de fundo
     window.addEventListener('storage', (e) => {
-        // Sincroniza a trava do botão de limpar o cache se clicado em outra aba
         if (e.key === 'EU5_CacheCooldown') {
             globalCacheCooldown = parseInt(e.newValue, 10) || 0;
             if (dropdownGlobal.classList.contains('show')) {
@@ -397,11 +381,10 @@
         }
     });
 
-    // --- CONTROLE DE INATIVIDADE (IDLE DETECTION) ---
     const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
     let lastActivityTime = Date.now();
     let activityTimeout;
-    let wasIdleRecently = false; // Truque para o usuário conseguir ver o ícone "Pausado" quando voltar
+    let wasIdleRecently = false; 
 
     function isIdleNow() {
         return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS;
@@ -413,7 +396,6 @@
                 const now = Date.now();
                 if (isIdleNow()) {
                     wasIdleRecently = true;
-                    // Mantém o status "Pausado" visualmente por 4 segundos para o usuário ver ao retornar
                     setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
                 }
                 lastActivityTime = now;
@@ -430,7 +412,6 @@
         if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
         if (tooltipGlobal.classList.contains('show')) refreshTooltipTimers();
 
-        // Se estiver inativo, não busca novos dados (economiza requisições)
         if (!document.hidden && !isIdleNow()) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
@@ -677,31 +658,51 @@
         GM_xmlhttpRequest({
             method: "GET", url: "https://insane.x10.mx/eu5.php?_t=" + Date.now(),
             onload: function(response) {
-                insaneDatabaseCache = {};
-                insaneCacheExp     = 0;
-                try {
-                    const jsonString = extractJsonArray(response.responseText, 'allMods');
-                    if (jsonString) {
-                        JSON.parse(jsonString).forEach(mod => {
-                            if (mod.name && (mod.link || mod.url)) {
-                                const idSteam = mod.name.match(/^(\d+)/);
-                                if (idSteam) insaneDatabaseCache[idSteam[1]] = { link: mod.link || mod.url, uploaded: mod.uploaded };
+                let success = false;
+                
+                // Melhoria Inteligente: Validação total (status HTTP e integridade do JSON)
+                if (response.status === 200) {
+                    try {
+                        const jsonString = extractJsonArray(response.responseText, 'allMods');
+                        if (jsonString) {
+                            const parsedData = JSON.parse(jsonString);
+                            if (Array.isArray(parsedData)) {
+                                insaneDatabaseCache = {};
+                                parsedData.forEach(mod => {
+                                    if (mod.name && (mod.link || mod.url)) {
+                                        const idSteam = mod.name.match(/^(\d+)/);
+                                        if (idSteam) insaneDatabaseCache[idSteam[1]] = { link: mod.link || mod.url, uploaded: mod.uploaded };
+                                    }
+                                });
+
+                                insaneCacheExp = Date.now() + CACHE_TIME_INSANE_MS;
+                                saveCacheSafely('EU5_InsaneCache', {
+                                    data: insaneDatabaseCache,
+                                    exp:  insaneCacheExp
+                                });
+                                success = true;
                             }
-                        });
+                        }
+                    } catch (e) {}
+                }
 
-                        insaneCacheExp = Date.now() + CACHE_TIME_INSANE_MS;
-                        saveCacheSafely('EU5_InsaneCache', {
-                            data: insaneDatabaseCache,
-                            exp:  insaneCacheExp
-                        });
-                    }
-                } catch (e) {}
-
-                fetchQueue.forEach(cb => cb(insaneDatabaseCache)); fetchQueue = [];
+                if (success) {
+                    fetchQueue.forEach(cb => cb(insaneDatabaseCache));
+                } else {
+                    insaneDatabaseCache = null;
+                    insaneCacheExp = 0;
+                    // Força retorno nulo ativando o modo de falha (DB Error) real.
+                    fetchQueue.forEach(cb => cb(null));
+                }
+                
+                fetchQueue = [];
                 isFetchingInsane = false;
             },
             onerror: () => {
-                fetchQueue.forEach(cb => cb(null)); fetchQueue = [];
+                insaneDatabaseCache = null;
+                insaneCacheExp = 0;
+                fetchQueue.forEach(cb => cb(null)); 
+                fetchQueue = [];
                 isFetchingInsane = false;
             }
         });
