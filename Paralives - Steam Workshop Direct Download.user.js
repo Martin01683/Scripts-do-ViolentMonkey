@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.2
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -24,12 +24,10 @@
     function isParalivesPage() {
         const url = window.location.href;
         
-        // Se a URL já entregar o jogo (browse ou app)
         if (url.includes(`appid=${PARALIVES_APPID}`) || url.includes(`/app/${PARALIVES_APPID}/`)) {
             return true;
         }
 
-        // Se estiver na página do Mod (sharedfiles ou workshop/filedetails), procura elementos estruturais seguros da Steam
         const targetElements = document.querySelector(`
             .breadcrumbs a[href*="/app/${PARALIVES_APPID}"], 
             .apphub_sectionTab[href*="/app/${PARALIVES_APPID}"], 
@@ -40,20 +38,12 @@
         return targetElements !== null;
     }
 
-    // --- 2. GUARDA DE ENTRADA (Early Return) ---
-    if (!isParalivesPage()) {
-        return; 
-    }
-
-    // ========================================================================
-    // SE O SCRIPT CHEGOU AQUI, ESTAMOS NO PARALIVES
-    // ========================================================================
+    if (!isParalivesPage()) return; 
 
     // --- TEMPOS DE CACHE ---
-    const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
-    const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
+    const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  
+    const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; 
 
-    // Sentinels para o cache da Steam
     const STEAM_NO_DATE     = 'NO_DATE';
     const STEAM_FETCH_ERROR = 'FETCH_ERROR';
 
@@ -119,14 +109,11 @@
         return `${m}m ${s}s`;
     }
 
-    // --- SINCRONIZAÇÃO DE COOLDOWN ENTRE ABAS ---
-    function getGlobalCacheCooldown() {
-        const stored = localStorage.getItem('Paralives_CacheCooldown');
-        return stored ? parseInt(stored, 10) : 0;
-    }
+    let globalCacheCooldown = parseInt(localStorage.getItem('Paralives_CacheCooldown') || '0', 10);
 
     function setGlobalCacheCooldown(ms) {
-        localStorage.setItem('Paralives_CacheCooldown', (Date.now() + ms).toString());
+        globalCacheCooldown = Date.now() + ms;
+        try { localStorage.setItem('Paralives_CacheCooldown', globalCacheCooldown.toString()); } catch(err) {}
     }
 
     function saveCacheSafely(key, dataObj) {
@@ -218,10 +205,9 @@
         const cacheBtn = dropdownGlobal.querySelector('#insane-clear-cache');
         if (!cacheBtn) return;
         const now = Date.now();
-        const cooldownExp = getGlobalCacheCooldown();
         
-        if (now < cooldownExp) {
-            const s = Math.ceil((cooldownExp - now) / 1000);
+        if (now < globalCacheCooldown) {
+            const s = Math.ceil((globalCacheCooldown - now) / 1000);
             cacheBtn.style.cursor = 'not-allowed';
             cacheBtn.style.opacity = '0.5';
             cacheBtn.innerHTML = t.cacheCooldown.replace('{s}', s);
@@ -238,20 +224,23 @@
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
-            const cooldownExp = getGlobalCacheCooldown();
             
-            if (now >= cooldownExp) {
-                setGlobalCacheCooldown(30000); // Trava de 30 segundos sincronizada no localStorage
-                
-                // Limpar Storages Globais
+            if (now >= globalCacheCooldown) {
+                setGlobalCacheCooldown(30000);
+
                 localStorage.removeItem('Paralives_SteamCache');
                 localStorage.removeItem('Paralives_InsaneCache');
                 
-                // Limpar Memória Local
                 insaneDatabaseCache = null;
                 insaneCacheExp = 0;
                 steamDateCache = {};
                 localSteamCache = {};
+                
+                // Melhoria Inteligente: Zerar as filas solta os callbacks engatados. 
+                // As requisições que já estão na rua não são mortas, e quando voltarem
+                // alimentarão os novos botões!
+                fetchQueue = [];
+                steamCallbacks.clear();
                 
                 updateDropdownCacheText();
 
@@ -320,7 +309,7 @@
                 ${showForum ? `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${forumText}</a>` : ''}
             `;
             updateDropdownCacheText();
-
+            
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
             return;
@@ -332,7 +321,16 @@
     }, true);
 
     window.addEventListener('scroll', () => { 
-        dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
+        if (dropdownGlobal.classList.contains('show')) {
+            dropdownGlobal.classList.remove('show'); 
+            safeHidePopover(dropdownGlobal); 
+            dropdownGlobal.lastArrow = null; 
+        }
+        if (tooltipGlobal.classList.contains('show')) {
+            clearTimeout(hoverTimer);
+            tooltipGlobal.classList.remove('show'); 
+            safeHidePopover(tooltipGlobal); 
+        }
     }, { passive: true });
 
     const tooltipGlobal = document.createElement('div');
@@ -353,7 +351,6 @@
             if (created) el.innerText = formatCacheAge(Date.now() - created);
         });
 
-        // Atualiza a interface de inatividade visual
         const idleStatusEl = tooltipGlobal.querySelector('.insane-idle-status');
         if (idleStatusEl) {
             const idleTextHtml = (isIdleNow() || wasIdleRecently) 
@@ -366,6 +363,12 @@
     let globalCacheCleared = false;
 
     window.addEventListener('storage', (e) => {
+        if (e.key === 'Paralives_CacheCooldown') {
+            globalCacheCooldown = parseInt(e.newValue, 10) || 0;
+            if (dropdownGlobal.classList.contains('show')) {
+                updateDropdownCacheText();
+            }
+        }
         if (e.key === 'Paralives_SteamCache' && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
@@ -378,11 +381,10 @@
         }
     });
 
-    // --- CONTROLE DE INATIVIDADE (IDLE DETECTION) ---
     const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
     let lastActivityTime = Date.now();
     let activityTimeout;
-    let wasIdleRecently = false; // Truque para o usuário conseguir ver o ícone "Pausado" quando voltar
+    let wasIdleRecently = false; 
 
     function isIdleNow() {
         return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS;
@@ -394,7 +396,6 @@
                 const now = Date.now();
                 if (isIdleNow()) {
                     wasIdleRecently = true;
-                    // Mantém o status "Pausado" visualmente por 4 segundos para o usuário ver ao retornar
                     setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
                 }
                 lastActivityTime = now;
@@ -411,7 +412,6 @@
         if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
         if (tooltipGlobal.classList.contains('show')) refreshTooltipTimers();
 
-        // Se estiver inativo, não busca novos dados (economiza requisições)
         if (!document.hidden && !isIdleNow()) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
@@ -468,7 +468,7 @@
                 if (dialogParent) dialogParent.appendChild(tooltipGlobal); else document.body.appendChild(tooltipGlobal);
                 
                 tooltipGlobal.innerHTML = htmlContent;
-                refreshTooltipTimers(); 
+                refreshTooltipTimers();
 
                 tooltipGlobal.classList.add('show');
                 safeShowPopover(tooltipGlobal);
@@ -519,6 +519,23 @@
         }
     }
 
+    function handleSteamError(ids) {
+        const now = Date.now();
+        ids.forEach(id => {
+            steamDateCache[id] = STEAM_FETCH_ERROR;
+            localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_STEAM_MS };
+            pendingSteamIDs.delete(id);
+
+            if (steamCallbacks.has(id)) {
+                steamCallbacks.get(id).forEach(cb => cb());
+                steamCallbacks.delete(id);
+            }
+        });
+        saveCacheSafely('Paralives_SteamCache', localSteamCache);
+        isFetchingBatch = false; 
+        triggerSteamFetch();
+    }
+
     function processSteamQueue() {
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
 
@@ -528,9 +545,16 @@
         idsToFetch.forEach((id, index) => dataString += `&publishedfileids[${index}]=${id}`);
 
         GM_xmlhttpRequest({
-            method: 'POST', url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
-            data: dataString, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            method: 'POST', 
+            url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
+            data: dataString, 
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             onload: function(response) {
+                if (response.status !== 200) {
+                    handleSteamError(idsToFetch);
+                    return;
+                }
+
                 const now = Date.now();
                 const handledIds = new Set();
                 try {
@@ -551,7 +575,10 @@
                             }
                         });
                     }
-                } catch(e) {}
+                } catch(e) {
+                    handleSteamError(idsToFetch);
+                    return;
+                }
 
                 idsToFetch.forEach(id => {
                     if (!handledIds.has(id)) {
@@ -567,22 +594,11 @@
                 });
 
                 saveCacheSafely('Paralives_SteamCache', localSteamCache);
-                isFetchingBatch = false; triggerSteamFetch();
+                isFetchingBatch = false; 
+                triggerSteamFetch();
             },
             onerror: () => {
-                const now = Date.now();
-                idsToFetch.forEach(id => {
-                    steamDateCache[id] = STEAM_FETCH_ERROR;
-                    localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_STEAM_MS };
-                    pendingSteamIDs.delete(id);
-
-                    if (steamCallbacks.has(id)) {
-                        steamCallbacks.get(id).forEach(cb => cb());
-                        steamCallbacks.delete(id);
-                    }
-                });
-                saveCacheSafely('Paralives_SteamCache', localSteamCache);
-                isFetchingBatch = false; triggerSteamFetch();
+                handleSteamError(idsToFetch);
             }
         });
     }
@@ -642,31 +658,51 @@
         GM_xmlhttpRequest({
             method: "GET", url: "https://insane.x10.mx/paralives.php?_t=" + Date.now(),
             onload: function(response) {
-                insaneDatabaseCache = {};
-                insaneCacheExp     = 0;
-                try {
-                    const jsonString = extractJsonArray(response.responseText, 'allMods');
-                    if (jsonString) {
-                        JSON.parse(jsonString).forEach(mod => {
-                            if (mod.name && (mod.link || mod.url)) {
-                                const idSteam = mod.name.match(/^(\d+)/);
-                                if (idSteam) insaneDatabaseCache[idSteam[1]] = { link: mod.link || mod.url, uploaded: mod.uploaded };
+                let success = false;
+                
+                // Melhoria Inteligente: Validação total (status HTTP e integridade do JSON)
+                if (response.status === 200) {
+                    try {
+                        const jsonString = extractJsonArray(response.responseText, 'allMods');
+                        if (jsonString) {
+                            const parsedData = JSON.parse(jsonString);
+                            if (Array.isArray(parsedData)) {
+                                insaneDatabaseCache = {};
+                                parsedData.forEach(mod => {
+                                    if (mod.name && (mod.link || mod.url)) {
+                                        const idSteam = mod.name.match(/^(\d+)/);
+                                        if (idSteam) insaneDatabaseCache[idSteam[1]] = { link: mod.link || mod.url, uploaded: mod.uploaded };
+                                    }
+                                });
+
+                                insaneCacheExp = Date.now() + CACHE_TIME_INSANE_MS;
+                                saveCacheSafely('Paralives_InsaneCache', {
+                                    data: insaneDatabaseCache,
+                                    exp:  insaneCacheExp
+                                });
+                                success = true;
                             }
-                        });
+                        }
+                    } catch (e) {}
+                }
 
-                        insaneCacheExp = Date.now() + CACHE_TIME_INSANE_MS;
-                        saveCacheSafely('Paralives_InsaneCache', {
-                            data: insaneDatabaseCache,
-                            exp:  insaneCacheExp
-                        });
-                    }
-                } catch (e) {}
-
-                fetchQueue.forEach(cb => cb(insaneDatabaseCache)); fetchQueue = [];
+                if (success) {
+                    fetchQueue.forEach(cb => cb(insaneDatabaseCache));
+                } else {
+                    insaneDatabaseCache = null;
+                    insaneCacheExp = 0;
+                    // Força retorno nulo ativando o modo de falha (DB Error) real.
+                    fetchQueue.forEach(cb => cb(null));
+                }
+                
+                fetchQueue = [];
                 isFetchingInsane = false;
             },
             onerror: () => {
-                fetchQueue.forEach(cb => cb(null)); fetchQueue = [];
+                insaneDatabaseCache = null;
+                insaneCacheExp = 0;
+                fetchQueue.forEach(cb => cb(null)); 
+                fetchQueue = [];
                 isFetchingInsane = false;
             }
         });
