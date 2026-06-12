@@ -19,6 +19,36 @@
 
     const EU5_APPID = '3450310';
     
+    // --- 1. FUNÇÃO DE DETEÇÃO OTIMIZADA E ESTRUTURAL ---
+    function isEU5Page() {
+        const url = window.location.href;
+        
+        // Se a URL já entregar o jogo (browse ou app)
+        if (url.includes(`appid=${EU5_APPID}`) || url.includes(`/app/${EU5_APPID}/`)) {
+            return true;
+        }
+
+        // Se estiver na página do Mod (sharedfiles/filedetails), procura elementos estruturais seguros da Steam
+        const targetElements = document.querySelector(`
+            .breadcrumbs a[href*="/app/${EU5_APPID}"], 
+            .apphub_sectionTab[href*="/app/${EU5_APPID}"], 
+            .apphub_OtherSiteInfo a[href*="store.steampowered.com/app/${EU5_APPID}"],
+            input[name="appid"][value="${EU5_APPID}"]
+        `);
+
+        return targetElements !== null;
+    }
+
+    // --- 2. GUARDA DE ENTRADA (Early Return) ---
+    // Se a página NÃO for do EU5, encerramos a execução do script IMEDIATAMENTE aqui.
+    if (!isEU5Page()) {
+        return; 
+    }
+
+    // ========================================================================
+    // SE O SCRIPT CHEGOU AQUI, ESTAMOS NO EUROPA UNIVERSALIS V
+    // ========================================================================
+
     // --- TEMPOS DE CACHE CONFIGURADOS INDIVIDUALMENTE ---
     const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
     const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
@@ -88,13 +118,6 @@
         const m = Math.floor(left / 60000);
         const s = Math.floor((left % 60000) / 1000);
         return `${m}m ${s}s`;
-    }
-
-    function isEU5Page() {
-        const url = window.location.href;
-        if (url.includes(`appid=${EU5_APPID}`) || url.includes(`/app/${EU5_APPID}/`)) return true;
-        if (document.querySelector(`a[href*="${EU5_APPID}"]`) || document.querySelector(`[onclick*="${EU5_APPID}"]`)) return true;
-        return false;
     }
 
     function saveCacheSafely(key, dataObj) {
@@ -199,8 +222,6 @@
     }
 
     document.addEventListener('click', (e) => {
-        if (!isEU5Page()) return; 
-
         // Botão de Limpar Cache
         const clearCacheBtn = e.target.closest('#insane-clear-cache');
         if (clearCacheBtn) {
@@ -302,7 +323,6 @@
     }, true);
 
     window.addEventListener('scroll', () => { 
-        if (!isEU5Page()) return;
         dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
     }, { passive: true });
 
@@ -329,7 +349,6 @@
 
     // Monitora a limpeza do cache efetuada em abas de fundo (outras guias abertas)
     window.addEventListener('storage', (e) => {
-        if (!isEU5Page()) return;
         if (e.key === 'EU5_SteamCache' && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
@@ -343,8 +362,6 @@
     });
 
     setInterval(() => {
-        if (!isEU5Page()) return; 
-
         if (dropdownGlobal.classList.contains('show')) {
             updateDropdownCacheText();
         }
@@ -468,7 +485,6 @@
     }
 
     function processSteamQueue() {
-        if (!isEU5Page()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
 
         isFetchingBatch = true;
@@ -718,8 +734,6 @@
     }
 
     function injectWidgets() {
-        if (!isEU5Page()) return;
-
         if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
