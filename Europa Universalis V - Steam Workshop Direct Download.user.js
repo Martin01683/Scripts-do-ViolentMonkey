@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.19
-// @description  Link direto otimizado
+// @version      1.19.1
+// @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
