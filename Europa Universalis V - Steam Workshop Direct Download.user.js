@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.13
+// @version      1.14
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -221,6 +221,11 @@
                 localSteamCache = {};
                 
                 updateDropdownCacheText();
+
+                // Esconder o menu imediatamente
+                dropdownGlobal.classList.remove('show');
+                safeHidePopover(dropdownGlobal);
+                dropdownGlobal.lastArrow = null;
                 
                 // Forçar recarga de todos os widgets na tela sem recarregar a página
                 document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
@@ -320,6 +325,23 @@
         });
     }
 
+    let globalCacheCleared = false;
+
+    // Monitora a limpeza do cache efetuada em abas de fundo (outras guias abertas)
+    window.addEventListener('storage', (e) => {
+        if (!isEU5Page()) return;
+        if (e.key === 'EU5_SteamCache' && e.newValue === null) {
+            steamDateCache = {};
+            localSteamCache = {};
+            globalCacheCleared = true;
+        }
+        if (e.key === 'EU5_InsaneCache' && e.newValue === null) {
+            insaneDatabaseCache = null;
+            insaneCacheExp = 0;
+            globalCacheCleared = true;
+        }
+    });
+
     setInterval(() => {
         if (!isEU5Page()) return; 
 
@@ -337,6 +359,12 @@
 
             if (dbExpired) {
                 insaneDatabaseCache = null;
+                insaneCacheExp = 0;
+            }
+
+            const forceUpdate = globalCacheCleared;
+            if (forceUpdate) {
+                globalCacheCleared = false;
             }
 
             document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
@@ -352,7 +380,7 @@
                         delete steamDateCache[modId];
                     }
 
-                    if ((dbExpired || steamExpired) && !container.querySelector('.insane-state-loading')) {
+                    if ((dbExpired || steamExpired || forceUpdate) && !container.querySelector('.insane-state-loading')) {
                         if (container.matches(':hover')) {
                             tooltipGlobal.classList.remove('show');
                             safeHidePopover(tooltipGlobal);
