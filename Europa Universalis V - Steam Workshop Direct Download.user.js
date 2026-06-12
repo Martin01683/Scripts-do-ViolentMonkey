@@ -120,14 +120,12 @@
         return `${m}m ${s}s`;
     }
 
-    // --- SINCRONIZAÇÃO DE COOLDOWN ENTRE ABAS ---
-    function getGlobalCacheCooldown() {
-        const stored = localStorage.getItem('EU5_CacheCooldown');
-        return stored ? parseInt(stored, 10) : 0;
-    }
+    // --- SINCRONIZAÇÃO OTIMIZADA DE COOLDOWN ENTRE ABAS ---
+    let globalCacheCooldown = parseInt(localStorage.getItem('EU5_CacheCooldown') || '0', 10);
 
     function setGlobalCacheCooldown(ms) {
-        localStorage.setItem('EU5_CacheCooldown', (Date.now() + ms).toString());
+        globalCacheCooldown = Date.now() + ms;
+        try { localStorage.setItem('EU5_CacheCooldown', globalCacheCooldown.toString()); } catch(err) {}
     }
 
     function saveCacheSafely(key, dataObj) {
@@ -219,10 +217,9 @@
         const cacheBtn = dropdownGlobal.querySelector('#insane-clear-cache');
         if (!cacheBtn) return;
         const now = Date.now();
-        const cooldownExp = getGlobalCacheCooldown();
         
-        if (now < cooldownExp) {
-            const s = Math.ceil((cooldownExp - now) / 1000);
+        if (now < globalCacheCooldown) {
+            const s = Math.ceil((globalCacheCooldown - now) / 1000);
             cacheBtn.style.cursor = 'not-allowed';
             cacheBtn.style.opacity = '0.5';
             cacheBtn.innerHTML = t.cacheCooldown.replace('{s}', s);
@@ -240,10 +237,9 @@
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
-            const cooldownExp = getGlobalCacheCooldown();
             
-            if (now >= cooldownExp) {
-                setGlobalCacheCooldown(30000); // Trava de 30 segundos sincronizada no localStorage
+            if (now >= globalCacheCooldown) {
+                setGlobalCacheCooldown(30000); // Trava de 30 segundos
 
                 // Limpar Storages Globais
                 localStorage.removeItem('EU5_SteamCache');
@@ -336,8 +332,18 @@
         }
     }, true);
 
+    // Esconde o menu e tooltip instantaneamente se rolar a página
     window.addEventListener('scroll', () => { 
-        dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
+        if (dropdownGlobal.classList.contains('show')) {
+            dropdownGlobal.classList.remove('show'); 
+            safeHidePopover(dropdownGlobal); 
+            dropdownGlobal.lastArrow = null; 
+        }
+        if (tooltipGlobal.classList.contains('show')) {
+            clearTimeout(hoverTimer);
+            tooltipGlobal.classList.remove('show'); 
+            safeHidePopover(tooltipGlobal); 
+        }
     }, { passive: true });
 
     const tooltipGlobal = document.createElement('div');
@@ -374,6 +380,7 @@
     window.addEventListener('storage', (e) => {
         // Sincroniza a trava do botão de limpar o cache se clicado em outra aba
         if (e.key === 'EU5_CacheCooldown') {
+            globalCacheCooldown = parseInt(e.newValue, 10) || 0;
             if (dropdownGlobal.classList.contains('show')) {
                 updateDropdownCacheText();
             }
@@ -531,6 +538,23 @@
         }
     }
 
+    function handleSteamError(ids) {
+        const now = Date.now();
+        ids.forEach(id => {
+            steamDateCache[id] = STEAM_FETCH_ERROR;
+            localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_STEAM_MS };
+            pendingSteamIDs.delete(id);
+
+            if (steamCallbacks.has(id)) {
+                steamCallbacks.get(id).forEach(cb => cb());
+                steamCallbacks.delete(id);
+            }
+        });
+        saveCacheSafely('EU5_SteamCache', localSteamCache);
+        isFetchingBatch = false; 
+        triggerSteamFetch();
+    }
+
     function processSteamQueue() {
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
 
@@ -540,9 +564,16 @@
         idsToFetch.forEach((id, index) => dataString += `&publishedfileids[${index}]=${id}`);
 
         GM_xmlhttpRequest({
-            method: 'POST', url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
-            data: dataString, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            method: 'POST', 
+            url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
+            data: dataString, 
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             onload: function(response) {
+                if (response.status !== 200) {
+                    handleSteamError(idsToFetch);
+                    return;
+                }
+
                 const now = Date.now();
                 const handledIds = new Set();
                 try {
@@ -563,7 +594,10 @@
                             }
                         });
                     }
-                } catch(e) {}
+                } catch(e) {
+                    handleSteamError(idsToFetch);
+                    return;
+                }
 
                 idsToFetch.forEach(id => {
                     if (!handledIds.has(id)) {
@@ -579,22 +613,11 @@
                 });
 
                 saveCacheSafely('EU5_SteamCache', localSteamCache);
-                isFetchingBatch = false; triggerSteamFetch();
+                isFetchingBatch = false; 
+                triggerSteamFetch();
             },
             onerror: () => {
-                const now = Date.now();
-                idsToFetch.forEach(id => {
-                    steamDateCache[id] = STEAM_FETCH_ERROR;
-                    localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_STEAM_MS };
-                    pendingSteamIDs.delete(id);
-
-                    if (steamCallbacks.has(id)) {
-                        steamCallbacks.get(id).forEach(cb => cb());
-                        steamCallbacks.delete(id);
-                    }
-                });
-                saveCacheSafely('EU5_SteamCache', localSteamCache);
-                isFetchingBatch = false; triggerSteamFetch();
+                handleSteamError(idsToFetch);
             }
         });
     }
