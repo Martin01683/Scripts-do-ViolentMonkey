@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.12
+// @version      1.13
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -278,7 +278,7 @@
 
             // Exibir pedido de mod apenas se for mod desatualizado/faltando
             const showForum = arrowBtn.getAttribute('data-show-forum') === 'true';
-            const forumText = arrowBtn.classList.contains('insane-state-error') ? t.requestMod : `💬 ${t.requestUpdate}`;
+            const forumText = arrowBtn.classList.contains('insane-state-error') ? t.requestMod : t.requestUpdate;
 
             dropdownGlobal.innerHTML = `
                 <a id="insane-clear-cache"></a>
@@ -607,7 +607,7 @@
             if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
             
             if (!db[modId]) {
-                container.innerHTML = `<div class="insane-btn-group"><a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.requestMod}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="true">▼</button></div>`;
+                container.innerHTML = `<div class="insane-btn-group"><a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.requestMod}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
 
                 const creationTimeInsane = insaneCacheExp ? (insaneCacheExp - CACHE_TIME_INSANE_MS) : Date.now();
                 const strInsaneCache = formatCacheAge(Date.now() - creationTimeInsane);
