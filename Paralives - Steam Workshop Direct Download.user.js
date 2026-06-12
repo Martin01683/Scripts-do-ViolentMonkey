@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      3.10
+// @version      4.0
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
+// @match        https://steamcommunity.com/workshop/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/1118520/workshop/*
 // @grant        GM_xmlhttpRequest
@@ -28,7 +29,7 @@
             return true;
         }
 
-        // Se estiver na página do Mod (sharedfiles/filedetails), procura elementos estruturais seguros da Steam
+        // Se estiver na página do Mod (sharedfiles ou workshop/filedetails), procura elementos estruturais seguros da Steam
         const targetElements = document.querySelector(`
             .breadcrumbs a[href*="/app/${PARALIVES_APPID}"], 
             .apphub_sectionTab[href*="/app/${PARALIVES_APPID}"], 
@@ -40,7 +41,6 @@
     }
 
     // --- 2. GUARDA DE ENTRADA (Early Return) ---
-    // Se a página NÃO for do Paralives, encerramos a execução do script IMEDIATAMENTE aqui.
     if (!isParalivesPage()) {
         return; 
     }
@@ -49,12 +49,9 @@
     // SE O SCRIPT CHEGOU AQUI, ESTAMOS NO PARALIVES
     // ========================================================================
 
-    // --- TEMPOS DE CACHE CONFIGURADOS INDIVIDUALMENTE ---
+    // --- TEMPOS DE CACHE ---
     const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
     const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
-    
-    // Controle de tempo da trava do botão (busca o tempo salvo para funcionar entre abas)
-    let globalCacheCooldown = parseInt(localStorage.getItem('Paralives_CacheCooldown') || '0', 10); 
 
     // Sentinels para o cache da Steam
     const STEAM_NO_DATE     = 'NO_DATE';
@@ -120,6 +117,16 @@
         const m = Math.floor(left / 60000);
         const s = Math.floor((left % 60000) / 1000);
         return `${m}m ${s}s`;
+    }
+
+    // --- SINCRONIZAÇÃO DE COOLDOWN ENTRE ABAS ---
+    function getGlobalCacheCooldown() {
+        const stored = localStorage.getItem('Paralives_CacheCooldown');
+        return stored ? parseInt(stored, 10) : 0;
+    }
+
+    function setGlobalCacheCooldown(ms) {
+        localStorage.setItem('Paralives_CacheCooldown', (Date.now() + ms).toString());
     }
 
     function saveCacheSafely(key, dataObj) {
@@ -211,8 +218,10 @@
         const cacheBtn = dropdownGlobal.querySelector('#insane-clear-cache');
         if (!cacheBtn) return;
         const now = Date.now();
-        if (now < globalCacheCooldown) {
-            const s = Math.ceil((globalCacheCooldown - now) / 1000);
+        const cooldownExp = getGlobalCacheCooldown();
+        
+        if (now < cooldownExp) {
+            const s = Math.ceil((cooldownExp - now) / 1000);
             cacheBtn.style.cursor = 'not-allowed';
             cacheBtn.style.opacity = '0.5';
             cacheBtn.innerHTML = t.cacheCooldown.replace('{s}', s);
@@ -224,23 +233,21 @@
     }
 
     document.addEventListener('click', (e) => {
-        // Botão de Limpar Cache
         const clearCacheBtn = e.target.closest('#insane-clear-cache');
         if (clearCacheBtn) {
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
-            if (now >= globalCacheCooldown) {
-                globalCacheCooldown = now + 30000; // Trava de 30 segundos
+            const cooldownExp = getGlobalCacheCooldown();
+            
+            if (now >= cooldownExp) {
+                setGlobalCacheCooldown(30000); // Trava de 30 segundos sincronizada no localStorage
                 
-                // Salvar o tempo do Cooldown para compartilhar com outras abas
-                try { localStorage.setItem('Paralives_CacheCooldown', globalCacheCooldown.toString()); } catch(err) {}
-
                 // Limpar Storages Globais
                 localStorage.removeItem('Paralives_SteamCache');
                 localStorage.removeItem('Paralives_InsaneCache');
                 
-                // Limpar Memória
+                // Limpar Memória Local
                 insaneDatabaseCache = null;
                 insaneCacheExp = 0;
                 steamDateCache = {};
@@ -248,12 +255,10 @@
                 
                 updateDropdownCacheText();
 
-                // Esconder o menu imediatamente
                 dropdownGlobal.classList.remove('show');
                 safeHidePopover(dropdownGlobal);
                 dropdownGlobal.lastArrow = null;
                 
-                // Forçar recarga de todos os widgets na tela sem recarregar a página
                 document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
                     const modId  = container.dataset.modid;
                     const isCard = container.dataset.iscard === 'true';
@@ -307,7 +312,6 @@
                 }
             }
 
-            // Exibir pedido de mod apenas se for mod desatualizado/faltando
             const showForum = arrowBtn.getAttribute('data-show-forum') === 'true';
             const forumText = arrowBtn.classList.contains('insane-state-error') ? t.requestMod : t.requestUpdate;
 
@@ -348,19 +352,20 @@
             const created = parseInt(el.getAttribute('data-created'), 10);
             if (created) el.innerText = formatCacheAge(Date.now() - created);
         });
+
+        // Atualiza a interface de inatividade visual
+        const idleStatusEl = tooltipGlobal.querySelector('.insane-idle-status');
+        if (idleStatusEl) {
+            const idleTextHtml = (isIdleNow() || wasIdleRecently) 
+                ? '<span style="color:#F59E0B">⏸️ Pausado (Inativo)</span>' 
+                : '<span style="color:#A3E33B">🟢 Ativo</span>';
+            idleStatusEl.innerHTML = idleTextHtml;
+        }
     }
 
     let globalCacheCleared = false;
 
-    // Monitora a limpeza do cache e os blocos efetuados em abas de fundo
     window.addEventListener('storage', (e) => {
-        // Sincroniza a trava do botão de limpar o cache se clicado em outra aba
-        if (e.key === 'Paralives_CacheCooldown') {
-            globalCacheCooldown = parseInt(e.newValue, 10) || 0;
-            if (dropdownGlobal.classList.contains('show')) {
-                updateDropdownCacheText();
-            }
-        }
         if (e.key === 'Paralives_SteamCache' && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
@@ -373,16 +378,41 @@
         }
     });
 
+    // --- CONTROLE DE INATIVIDADE (IDLE DETECTION) ---
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+    let lastActivityTime = Date.now();
+    let activityTimeout;
+    let wasIdleRecently = false; // Truque para o usuário conseguir ver o ícone "Pausado" quando voltar
+
+    function isIdleNow() {
+        return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS;
+    }
+
+    function resetActivity() {
+        if (!activityTimeout) {
+            activityTimeout = setTimeout(() => {
+                const now = Date.now();
+                if (isIdleNow()) {
+                    wasIdleRecently = true;
+                    // Mantém o status "Pausado" visualmente por 4 segundos para o usuário ver ao retornar
+                    setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
+                }
+                lastActivityTime = now;
+                activityTimeout = null;
+            }, 1000); 
+        }
+    }
+
+    ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, resetActivity, { passive: true });
+    });
+
     setInterval(() => {
-        if (dropdownGlobal.classList.contains('show')) {
-            updateDropdownCacheText();
-        }
+        if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
+        if (tooltipGlobal.classList.contains('show')) refreshTooltipTimers();
 
-        if (tooltipGlobal.classList.contains('show')) {
-            refreshTooltipTimers();
-        }
-
-        if (!document.hidden) {
+        // Se estiver inativo, não busca novos dados (economiza requisições)
+        if (!document.hidden && !isIdleNow()) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
 
@@ -392,22 +422,15 @@
             }
 
             const forceUpdate = globalCacheCleared;
-            if (forceUpdate) {
-                globalCacheCleared = false;
-            }
+            if (forceUpdate) globalCacheCleared = false;
 
             document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
                 const modId  = container.dataset.modid;
                 const isCard = container.dataset.iscard === 'true';
 
                 if (modId) {
-                    const steamExpired = localSteamCache[modId]
-                        ? (now >= localSteamCache[modId].exp)
-                        : false;
-
-                    if (steamExpired) {
-                        delete steamDateCache[modId];
-                    }
+                    const steamExpired = localSteamCache[modId] ? (now >= localSteamCache[modId].exp) : false;
+                    if (steamExpired) delete steamDateCache[modId];
 
                     if ((dbExpired || steamExpired || forceUpdate) && !container.querySelector('.insane-state-loading')) {
                         if (container.matches(':hover')) {
@@ -670,7 +693,10 @@
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
                 const cacheInfoHtml = `
                     <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
-                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${t.labelCache}</span>
+                            <span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
+                        </div>
                         <div class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</div>
                     </div>`;
 
@@ -718,7 +744,10 @@
 
                 const cacheInfoHtml = `
                     <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
-                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px;">${t.labelCache}</div>
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${t.labelCache}</span>
+                            <span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
+                        </div>
                         <div style="display: flex; flex-direction: column; gap: 3px;">
                             <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheSteam} <span class="insane-cache-age" data-created="${creationTimeSteam}">${strSteamCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>)</span>
                             <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</span>
@@ -746,7 +775,8 @@
     }
 
     function injectWidgets() {
-        if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
+        const urlStr = window.location.href;
+        if (urlStr.includes("/sharedfiles/filedetails") || urlStr.includes("/workshop/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
             const subscribeControls = steamBtn ? steamBtn.parentElement : null;
@@ -788,7 +818,7 @@
             }
         }
 
-        document.querySelectorAll('h2 a[href*="sharedfiles/filedetails/?id="]').forEach(titleLink => {
+        document.querySelectorAll('h2 a[href*="sharedfiles/filedetails/?id="], h2 a[href*="workshop/filedetails/?id="]').forEach(titleLink => {
             let modalRoot = titleLink;
             for(let i = 0; i < 6; i++) { if(modalRoot.parentElement) modalRoot = modalRoot.parentElement; }
 
@@ -817,7 +847,7 @@
             let cardContainer = actionRow.parentElement, modLink = null;
             for (let i = 0; i < 5; i++) {
                 if (!cardContainer) break;
-                modLink = cardContainer.querySelector('a[href*="sharedfiles/filedetails/?id="]');
+                modLink = cardContainer.querySelector('a[href*="sharedfiles/filedetails/?id="], a[href*="workshop/filedetails/?id="]');
                 if (modLink) break;
                 cardContainer = cardContainer.parentElement;
             }
