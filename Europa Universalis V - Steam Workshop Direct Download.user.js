@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.14
+// @version      1.15
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -52,7 +52,8 @@
     // --- TEMPOS DE CACHE CONFIGURADOS INDIVIDUALMENTE ---
     const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
     const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
-    let globalCacheCooldown = 0; // Controle de tempo da trava do botão (30s)
+    // Controle de tempo da trava do botão (busca o tempo salvo para funcionar entre abas)
+    let globalCacheCooldown = parseInt(localStorage.getItem('EU5_CacheCooldown') || '0', 10);
 
     // Sentinels para o cache da Steam
     const STEAM_NO_DATE     = 'NO_DATE';
@@ -230,7 +231,10 @@
             const now = Date.now();
             if (now >= globalCacheCooldown) {
                 globalCacheCooldown = now + 30000; // Trava de 30 segundos
-                
+
+                // Salvar o tempo do Cooldown para compartilhar com outras abas
+                try { localStorage.setItem('EU5_CacheCooldown', globalCacheCooldown.toString()); } catch(err) {}
+
                 // Limpar Storages Globais
                 localStorage.removeItem('EU5_SteamCache');
                 localStorage.removeItem('EU5_InsaneCache');
@@ -347,8 +351,15 @@
 
     let globalCacheCleared = false;
 
-    // Monitora a limpeza do cache efetuada em abas de fundo (outras guias abertas)
+    // Monitora a limpeza do cache e os blocos efetuados em abas de fundo
     window.addEventListener('storage', (e) => {
+        // Sincroniza a trava do botão de limpar o cache se clicado em outra aba
+        if (e.key === 'EU5_CacheCooldown') {
+            globalCacheCooldown = parseInt(e.newValue, 10) || 0;
+            if (dropdownGlobal.classList.contains('show')) {
+                updateDropdownCacheText();
+            }
+        }
         if (e.key === 'EU5_SteamCache' && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
