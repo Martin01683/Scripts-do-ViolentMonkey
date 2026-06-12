@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.3
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -67,6 +67,8 @@
         minAgo:          'min atrás',
         steamError:      '⚠️ Sem Verificar',
         steamErrorTip:   'Falha na API Steam. Versão não verificada.',
+        mirrorNoDate:    '⚠️ Mirror sem data',
+        mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.',
         updateCache:     '🔄 Atualizar Cache',
         cacheCooldown:   '⏳ Atualizar cache ({s}s)'
     } : {
@@ -89,6 +91,8 @@
         minAgo:          'min ago',
         steamError:      '⚠️ Unverified',
         steamErrorTip:   'Steam API unreachable. Version not verified.',
+        mirrorNoDate:    '⚠️ Unverified Mirror',
+        mirrorNoDateTip: 'Could not verify mirror version date.',
         updateCache:     '🔄 Update Cache',
         cacheCooldown:   '⏳ Update cache ({s}s)'
     };
@@ -795,10 +799,14 @@
                     ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
                     : 'N/A';
 
+                // CORREÇÃO APLICADA AQUI ABAIXO
                 if (dataSteam === STEAM_FETCH_ERROR) {
                     container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
-                } else if (dataSteam === STEAM_NO_DATE || !dataInsane || dataInsane >= dataSteam) {
+                } else if (!dataInsane) {
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
+                    bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.mirrorNoDate}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">Info:</span> <span class="insane-tooltip-value">${t.mirrorNoDateTip}</span></div>${cacheInfoHtml}`);
+                } else if (dataSteam === STEAM_NO_DATE || dataInsane >= dataSteam) {
                     container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
                     bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else {
