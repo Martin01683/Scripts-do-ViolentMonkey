@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Europa Universalis V - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.9
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
 // @match        https://steamcommunity.com/app/3450310/workshop/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Europa%20Universalis%20V%20-%20Steam%20Workshop%20Direct%20Download.user.js
@@ -19,9 +20,7 @@
     const EU5_APPID = '3450310';
     const CACHE_TIME_MS = 10 * 60 * 1000; // 10 minutos
 
-    // Sentinels para o cache da Steam — mantidos separados intencionalmente:
-    //   STEAM_NO_DATE    → API respondeu, mas o item genuinamente não tem timestamp
-    //   STEAM_FETCH_ERROR → falha de rede/API; versão não pôde ser verificada
+    // Sentinels para o cache da Steam
     const STEAM_NO_DATE     = 'NO_DATE';
     const STEAM_FETCH_ERROR = 'FETCH_ERROR';
 
@@ -103,7 +102,6 @@
         }
     }
 
-    // ── FIX 3: adicionados pointerdown e pointerup para cobrir browsers modernos ──
     function stopCardNav(el) {
         const stop = (e) => e.stopPropagation();
         el.addEventListener('click',       stop);
@@ -177,6 +175,30 @@
     if (typeof dropdownGlobal.showPopover === 'function') dropdownGlobal.setAttribute('popover', 'manual');
 
     document.addEventListener('click', (e) => {
+        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+
+        const scriptLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
+        if (scriptLink && scriptLink.hasAttribute('href')) {
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                if (typeof GM_openInTab === 'function') {
+                    GM_openInTab(scriptLink.href, { active: false, insert: true });
+                } else {
+                    window.open(scriptLink.href, '_blank', 'noopener');
+                }
+
+                if (scriptLink.classList.contains('insane-bg-link') && dropdownGlobal.classList.contains('show')) {
+                    dropdownGlobal.classList.remove('show');
+                    safeHidePopover(dropdownGlobal);
+                    dropdownGlobal.lastArrow = null;
+                }
+                return;
+            }
+        }
+
         const arrowBtn = e.target.closest('.insane-btn-arrow');
         if (arrowBtn) {
             e.preventDefault(); e.stopPropagation();
@@ -199,7 +221,7 @@
                 }
             }
 
-            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" target="_blank" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
+            dropdownGlobal.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${t.requestUpdate}</a>`;
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
             return;
@@ -210,7 +232,10 @@
         }
     }, true);
 
-    window.addEventListener('scroll', () => { dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; }, { passive: true });
+    window.addEventListener('scroll', () => { 
+        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+        dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
+    }, { passive: true });
 
     const tooltipGlobal = document.createElement('div');
     tooltipGlobal.className = 'insane-custom-tooltip';
@@ -219,7 +244,8 @@
 
     // --- MOTOR EM TEMPO REAL: TOOLTIP E AUTO-REFRESH ---
     setInterval(() => {
-        // 1. Atualiza tooltips abertos
+        if (!isEU5Page()) return; // TRAVA DE SEGURANÇA
+
         if (tooltipGlobal.classList.contains('show')) {
             const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
             countdowns.forEach(el => {
@@ -228,13 +254,10 @@
             });
         }
 
-        // 2. Rechecagem automática APENAS se a aba estiver visível/ativa
         if (!document.hidden) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
 
-            // ── FIX 1: invalida o cache em memória da Insane DB quando expirar ──
-            // Sem isso, fetchInsaneData() retornava o objeto antigo indefinidamente.
             if (dbExpired) {
                 insaneDatabaseCache = null;
             }
@@ -248,9 +271,6 @@
                         ? (now >= localSteamCache[modId].exp)
                         : false;
 
-                    // ── FIX 2: apaga steamDateCache[modId] quando o localSteamCache expirar ──
-                    // Sem isso, drawDateComparison() encontrava o valor antigo em memória e
-                    // nunca chegava no bloco que dispara o novo fetch para a API da Steam.
                     if (steamExpired) {
                         delete steamDateCache[modId];
                     }
@@ -308,7 +328,6 @@
         });
     }
 
-    // --- SISTEMA DE CACHE: STEAM API ---
     let steamDateCache  = {};
     let localSteamCache = {};
     let pendingSteamIDs = new Set();
@@ -394,8 +413,6 @@
             onerror: () => {
                 const now = Date.now();
                 idsToFetch.forEach(id => {
-                    // FETCH_ERROR (≠ NO_DATE): a API não respondeu — não sabemos a versão.
-                    // Isso evita o falso positivo de mostrar ✅ quando houve falha de rede.
                     steamDateCache[id] = STEAM_FETCH_ERROR;
                     localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_MS };
                     pendingSteamIDs.delete(id);
@@ -411,7 +428,6 @@
         });
     }
 
-    // --- SISTEMA DE CACHE: INSANE DB ---
     let insaneDatabaseCache = null;
     let insaneCacheAgeMs   = 0;
     let insaneCacheExp     = 0;
@@ -443,16 +459,11 @@
     }
 
     function fetchInsaneData(callback) {
-        // ── FIX 1 (parte 2): checa insaneCacheExp antes de retornar o cache em memória ──
-        // Antes, a guard só testava !== null, ignorando se o cache já havia expirado.
-        // O timer reseta insaneDatabaseCache = null quando dbExpired é true, mas essa
-        // verificação aqui garante a correção mesmo em chamadas diretas fora do timer.
         if (insaneDatabaseCache !== null && Date.now() < insaneCacheExp) {
             callback(insaneDatabaseCache);
             return;
         }
 
-        // Se chegou aqui, o cache em memória está vazio ou expirado: tenta o localStorage
         try {
             const stored = localStorage.getItem('EU5_InsaneCache');
             if (stored) {
@@ -518,7 +529,7 @@
         fetchInsaneData((db) => {
             if (db === null) { container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-warning">${t.dbError}</a>`; return; }
             if (!db[modId]) {
-                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
+                container.innerHTML = `<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error">${t.requestMod}</a>`;
 
                 const strInsaneCache = formatCacheAge(insaneCacheAgeMs);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
@@ -540,8 +551,6 @@
 
                 if (dataSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
                     const cachedVal = localSteamCache[modId].date;
-                    // Preserva sentinels (NO_DATE e FETCH_ERROR) ao restaurar do localStorage;
-                    // só cria Date() se o valor for um timestamp ISO real.
                     dataSteam = steamDateCache[modId] =
                         (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR)
                             ? cachedVal
@@ -552,9 +561,6 @@
                     container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`;
                     pendingSteamIDs.add(modId);
 
-                    // Set em vez de Array: .add() ignora a mesma referência de função
-                    // caso drawDateComparison seja registrada duas vezes antes do fetch
-                    // completar, evitando double-render no mesmo container.
                     if (!steamCallbacks.has(modId)) steamCallbacks.set(modId, new Set());
                     steamCallbacks.get(modId).add(drawDateComparison);
 
@@ -589,16 +595,13 @@
                     : 'N/A';
 
                 if (dataSteam === STEAM_FETCH_ERROR) {
-                    // Falha de rede real — exibe estado de erro distinto do ✅ verde.
-                    // O link da Insane ainda funciona, mas o usuário sabe que a versão
-                    // não foi verificada, ao contrário do falso positivo anterior.
-                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow">▼</button></div>`;
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else if (dataSteam === STEAM_NO_DATE || !dataInsane || dataInsane >= dataSteam) {
-                    container.innerHTML = `<a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
+                    container.innerHTML = `<a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success">${t.download}</a>`;
                     bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 } else {
-                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" target="_blank" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
+                    container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
                 }
             }
