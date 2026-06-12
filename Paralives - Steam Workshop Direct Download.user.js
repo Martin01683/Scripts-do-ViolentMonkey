@@ -19,6 +19,36 @@
 
     const PARALIVES_APPID = '1118520';
 
+    // --- 1. FUNÇÃO DE DETEÇÃO OTIMIZADA E ESTRUTURAL ---
+    function isParalivesPage() {
+        const url = window.location.href;
+        
+        // Se a URL já entregar o jogo (browse ou app)
+        if (url.includes(`appid=${PARALIVES_APPID}`) || url.includes(`/app/${PARALIVES_APPID}/`)) {
+            return true;
+        }
+
+        // Se estiver na página do Mod (sharedfiles/filedetails), procura elementos estruturais seguros da Steam
+        const targetElements = document.querySelector(`
+            .breadcrumbs a[href*="/app/${PARALIVES_APPID}"], 
+            .apphub_sectionTab[href*="/app/${PARALIVES_APPID}"], 
+            .apphub_OtherSiteInfo a[href*="store.steampowered.com/app/${PARALIVES_APPID}"],
+            input[name="appid"][value="${PARALIVES_APPID}"]
+        `);
+
+        return targetElements !== null;
+    }
+
+    // --- 2. GUARDA DE ENTRADA (Early Return) ---
+    // Se a página NÃO for do Paralives, encerramos a execução do script IMEDIATAMENTE aqui.
+    if (!isParalivesPage()) {
+        return; 
+    }
+
+    // ========================================================================
+    // SE O SCRIPT CHEGOU AQUI, ESTAMOS NO PARALIVES
+    // ========================================================================
+
     // --- TEMPOS DE CACHE CONFIGURADOS INDIVIDUALMENTE ---
     const CACHE_TIME_STEAM_MS = 10 * 60 * 1000;  // 10 minutos para o cache da Steam
     const CACHE_TIME_INSANE_MS = 10 * 60 * 1000; // 10 minutos para o cache do Banco Insane
@@ -88,13 +118,6 @@
         const m = Math.floor(left / 60000);
         const s = Math.floor((left % 60000) / 1000);
         return `${m}m ${s}s`;
-    }
-
-    function isParalivesPage() {
-        const url = window.location.href;
-        if (url.includes(`appid=${PARALIVES_APPID}`) || url.includes(`/app/${PARALIVES_APPID}/`)) return true;
-        if (document.querySelector(`a[href*="${PARALIVES_APPID}"]`) || document.querySelector(`[onclick*="${PARALIVES_APPID}"]`)) return true;
-        return false;
     }
 
     function saveCacheSafely(key, dataObj) {
@@ -199,8 +222,6 @@
     }
 
     document.addEventListener('click', (e) => {
-        if (!isParalivesPage()) return; 
-
         // Botão de Limpar Cache
         const clearCacheBtn = e.target.closest('#insane-clear-cache');
         if (clearCacheBtn) {
@@ -302,7 +323,6 @@
     }, true);
 
     window.addEventListener('scroll', () => { 
-        if (!isParalivesPage()) return;
         dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
     }, { passive: true });
 
@@ -329,7 +349,6 @@
 
     // Monitora a limpeza do cache efetuada em abas de fundo (outras guias abertas)
     window.addEventListener('storage', (e) => {
-        if (!isParalivesPage()) return;
         if (e.key === 'Paralives_SteamCache' && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
@@ -343,8 +362,6 @@
     });
 
     setInterval(() => {
-        if (!isParalivesPage()) return; 
-
         if (dropdownGlobal.classList.contains('show')) {
             updateDropdownCacheText();
         }
@@ -468,7 +485,6 @@
     }
 
     function processSteamQueue() {
-        if (!isParalivesPage()) return;
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
 
         isFetchingBatch = true;
@@ -718,8 +734,6 @@
     }
 
     function injectWidgets() {
-        if (!isParalivesPage()) return;
-
         if (window.location.href.includes("steamcommunity.com/sharedfiles/filedetails")) {
             const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
