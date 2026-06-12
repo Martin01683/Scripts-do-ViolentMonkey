@@ -169,7 +169,7 @@
         .insane-custom-tooltip:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .insane-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
         .insane-tooltip-success { color: #A3E33B; } .insane-tooltip-warning { color: #F59E0B; } .insane-tooltip-error { color: #ff6b6b; }
-        .insane-tooltip-row { margin: 4px 0; } .insane-tooltip-label { color: #8f98a0; display: inline-block; width: 60px; } .insane-tooltip-value { color: #E2E8F0; font-weight: 500; }
+        .insane-tooltip-row { margin: 4px 0; text-align: left !important; } .insane-tooltip-label { color: #8f98a0; display: inline-block; width: auto; min-width: 48px; margin-right: 4px; } .insane-tooltip-value { color: #E2E8F0; font-weight: 500; }
         #insane-widget-main { display: inline-flex; height: 34px; align-items: center; }
         .insane-widget-container { position: relative; z-index: 10; display: inline-flex; align-items: center; }
         .insane-widget-container:hover { z-index: 9999; }
@@ -799,7 +799,6 @@
                     ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
                     : 'N/A';
 
-                // CORREÇÃO APLICADA AQUI ABAIXO
                 if (dataSteam === STEAM_FETCH_ERROR) {
                     container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
                     bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelInsane}</span> <span class="insane-tooltip-value">${strInsane}</span></div>${cacheInfoHtml}`);
