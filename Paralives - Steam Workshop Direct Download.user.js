@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Paralives - Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      4.3
+// @version      4.4
 // @description  Link direto
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -23,19 +23,14 @@
     // --- 1. FUNÇÃO DE DETEÇÃO OTIMIZADA E ESTRUTURAL ---
     function isParalivesPage() {
         const url = window.location.href;
+        if (url.includes(`appid=${PARALIVES_APPID}`) || url.includes(`/app/${PARALIVES_APPID}/`)) return true;
         
-        if (url.includes(`appid=${PARALIVES_APPID}`) || url.includes(`/app/${PARALIVES_APPID}/`)) {
-            return true;
-        }
-
-        const targetElements = document.querySelector(`
+        return document.querySelector(`
             .breadcrumbs a[href*="/app/${PARALIVES_APPID}"], 
             .apphub_sectionTab[href*="/app/${PARALIVES_APPID}"], 
             .apphub_OtherSiteInfo a[href*="store.steampowered.com/app/${PARALIVES_APPID}"],
             input[name="appid"][value="${PARALIVES_APPID}"]
-        `);
-
-        return targetElements !== null;
+        `) !== null;
     }
 
     if (!isParalivesPage()) return; 
@@ -47,7 +42,8 @@
     const STEAM_NO_DATE     = 'NO_DATE';
     const STEAM_FETCH_ERROR = 'FETCH_ERROR';
 
-    const t = document.documentElement.lang.toLowerCase().startsWith('pt') ? {
+    const isPt = document.documentElement.lang.toLowerCase().match(/^(pt|br)/);
+    const t = isPt ? {
         loading:         '⏳ Buscando...',
         checkingVersion: '⏳ Checando Versão...',
         dbError:         '⚠️ Erro DB',
@@ -59,7 +55,7 @@
         modOutdated:     'MOD DESATUALIZADO',
         requestUpdate:   'Pedir Atualização no Fórum',
         labelSteam:      'Steam:',
-        labelInsane:     'Espelho:',
+        labelInsane:     'Mirror:', // Alterado conforme solicitado
         labelCache:      'Status do Cache:',
         cacheSteam:      'Steam:',
         cacheDB:         'Banco de Dados:',
@@ -100,17 +96,14 @@
     function formatCacheAge(ms) {
         if (!ms || ms < 0 || isNaN(ms)) ms = 0;
         const minutes = Math.floor(ms / 60000);
-        if (minutes < 1) return t.justNow;
-        return `${minutes} ${t.minAgo}`;
+        return minutes < 1 ? t.justNow : `${minutes} ${t.minAgo}`;
     }
 
     function formatTimeLeft(expTimestamp) {
         if (!expTimestamp) return "0s";
         const left = expTimestamp - Date.now();
         if (left <= 0) return "0s";
-        const m = Math.floor(left / 60000);
-        const s = Math.floor((left % 60000) / 1000);
-        return `${m}m ${s}s`;
+        return `${Math.floor(left / 60000)}m ${Math.floor((left % 60000) / 1000)}s`;
     }
 
     let globalCacheCooldown = parseInt(localStorage.getItem('Paralives_CacheCooldown') || '0', 10);
@@ -133,17 +126,16 @@
         }
     }
 
+    // OTIMIZAÇÃO: Set para rastrear apenas os widgets na tela em vez de varrer a DOM toda hora
+    const activeWidgets = new Set();
+
     function stopCardNav(el) {
         const stop = (e) => e.stopPropagation();
-        el.addEventListener('click',       stop);
-        el.addEventListener('mousedown',   stop);
-        el.addEventListener('mouseup',     stop);
-        el.addEventListener('pointerdown', stop);
-        el.addEventListener('pointerup',   stop);
+        ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup'].forEach(evt => el.addEventListener(evt, stop));
     }
 
     const style = document.createElement('style');
-    style.innerHTML = `
+    style.textContent = `
         .insane-custom-btn { display: inline-flex !important; align-items: center !important; justify-content: center !important; padding: 0 15px !important; font-size: 13px !important; font-weight: bold !important; border-radius: 2px !important; text-decoration: none !important; white-space: nowrap !important; transition: all 0.2s ease-in-out !important; box-sizing: border-box !important; font-family: "Motiva Sans", Arial, Helvetica, sans-serif !important; box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important; gap: 8px !important; z-index: 99 !important; height: 34px !important; text-shadow: 1px 1px 2px rgba(0,0,0,0.5) !important; margin: 0 !important; }
         .insane-custom-btn-compact { padding: 0 8px !important; font-size: 11px !important; border-radius: 2px !important; gap: 4px !important; height: 24px !important; }
         .insane-custom-btn:hover { filter: brightness(1.15) !important; }
@@ -225,11 +217,8 @@
     document.addEventListener('click', (e) => {
         const clearCacheBtn = e.target.closest('#insane-clear-cache');
         if (clearCacheBtn) {
-            e.preventDefault();
-            e.stopPropagation();
-            const now = Date.now();
-            
-            if (now >= globalCacheCooldown) {
+            e.preventDefault(); e.stopPropagation();
+            if (Date.now() >= globalCacheCooldown) {
                 setGlobalCacheCooldown(30000);
 
                 localStorage.removeItem('Paralives_SteamCache');
@@ -240,47 +229,35 @@
                 steamDateCache = {};
                 localSteamCache = {};
                 
-                // Melhoria Inteligente: Zerar as filas solta os callbacks engatados. 
-                // As requisições que já estão na rua não são mortas, e quando voltarem
-                // alimentarão os novos botões!
                 fetchQueue = [];
                 steamCallbacks.clear();
+                pendingSteamIDs.clear();
                 
                 updateDropdownCacheText();
-
                 dropdownGlobal.classList.remove('show');
                 safeHidePopover(dropdownGlobal);
                 dropdownGlobal.lastArrow = null;
                 
-                document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
-                    const modId  = container.dataset.modid;
-                    const isCard = container.dataset.iscard === 'true';
-                    if (modId) renderWidget(container, modId, isCard);
-                });
+                // Otimização: Renderiza usando o Set
+                for (const container of activeWidgets) {
+                    if (container.dataset.modid) renderWidget(container, container.dataset.modid, container.dataset.iscard === 'true');
+                }
             }
             return;
         }
 
         const scriptLink = e.target.closest('a.insane-custom-btn, a.insane-bg-link');
-        if (scriptLink && scriptLink.hasAttribute('href')) {
-            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
+        if (scriptLink && scriptLink.hasAttribute('href') && e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+            if (typeof GM_openInTab === 'function') GM_openInTab(scriptLink.href, { active: false, insert: true });
+            else window.open(scriptLink.href, '_blank', 'noopener');
 
-                if (typeof GM_openInTab === 'function') {
-                    GM_openInTab(scriptLink.href, { active: false, insert: true });
-                } else {
-                    window.open(scriptLink.href, '_blank', 'noopener');
-                }
-
-                if (scriptLink.classList.contains('insane-bg-link') && dropdownGlobal.classList.contains('show')) {
-                    dropdownGlobal.classList.remove('show');
-                    safeHidePopover(dropdownGlobal);
-                    dropdownGlobal.lastArrow = null;
-                }
-                return;
+            if (scriptLink.classList.contains('insane-bg-link') && dropdownGlobal.classList.contains('show')) {
+                dropdownGlobal.classList.remove('show');
+                safeHidePopover(dropdownGlobal);
+                dropdownGlobal.lastArrow = null;
             }
+            return;
         }
 
         const arrowBtn = e.target.closest('.insane-btn-arrow');
@@ -327,8 +304,7 @@
     window.addEventListener('scroll', () => { 
         if (dropdownGlobal.classList.contains('show')) {
             dropdownGlobal.classList.remove('show'); 
-            safeHidePopover(dropdownGlobal); 
-            dropdownGlobal.lastArrow = null; 
+            safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
         }
         if (tooltipGlobal.classList.contains('show')) {
             clearTimeout(hoverTimer);
@@ -343,24 +319,21 @@
     let hoverTimer;
 
     function refreshTooltipTimers() {
-        const countdowns = tooltipGlobal.querySelectorAll('.insane-cache-countdown');
-        countdowns.forEach(el => {
+        tooltipGlobal.querySelectorAll('.insane-cache-countdown').forEach(el => {
             const exp = parseInt(el.getAttribute('data-exp'), 10);
             if (exp) el.innerText = formatTimeLeft(exp);
         });
 
-        const ages = tooltipGlobal.querySelectorAll('.insane-cache-age');
-        ages.forEach(el => {
+        tooltipGlobal.querySelectorAll('.insane-cache-age').forEach(el => {
             const created = parseInt(el.getAttribute('data-created'), 10);
             if (created) el.innerText = formatCacheAge(Date.now() - created);
         });
 
         const idleStatusEl = tooltipGlobal.querySelector('.insane-idle-status');
         if (idleStatusEl) {
-            const idleTextHtml = (isIdleNow() || wasIdleRecently) 
+            idleStatusEl.innerHTML = (isIdleNow() || wasIdleRecently) 
                 ? '<span style="color:#F59E0B">⏸️ Pausado (Inativo)</span>' 
                 : '<span style="color:#A3E33B">🟢 Ativo</span>';
-            idleStatusEl.innerHTML = idleTextHtml;
         }
     }
 
@@ -369,19 +342,13 @@
     window.addEventListener('storage', (e) => {
         if (e.key === 'Paralives_CacheCooldown') {
             globalCacheCooldown = parseInt(e.newValue, 10) || 0;
-            if (dropdownGlobal.classList.contains('show')) {
-                updateDropdownCacheText();
-            }
+            if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
         }
         if (e.key === 'Paralives_SteamCache' && e.newValue === null) {
-            steamDateCache = {};
-            localSteamCache = {};
-            globalCacheCleared = true;
+            steamDateCache = {}; localSteamCache = {}; globalCacheCleared = true;
         }
         if (e.key === 'Paralives_InsaneCache' && e.newValue === null) {
-            insaneDatabaseCache = null;
-            insaneCacheExp = 0;
-            globalCacheCleared = true;
+            insaneDatabaseCache = null; insaneCacheExp = 0; globalCacheCleared = true;
         }
     });
 
@@ -390,9 +357,7 @@
     let activityTimeout;
     let wasIdleRecently = false; 
 
-    function isIdleNow() {
-        return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS;
-    }
+    function isIdleNow() { return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS; }
 
     function resetActivity() {
         if (!activityTimeout) {
@@ -408,9 +373,7 @@
         }
     }
 
-    ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'].forEach(evt => {
-        window.addEventListener(evt, resetActivity, { passive: true });
-    });
+    ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'].forEach(evt => window.addEventListener(evt, resetActivity, { passive: true }));
 
     setInterval(() => {
         if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
@@ -419,19 +382,19 @@
         if (!document.hidden && !isIdleNow()) {
             const now = Date.now();
             const dbExpired = (insaneCacheExp > 0 && now >= insaneCacheExp);
-
-            if (dbExpired) {
-                insaneDatabaseCache = null;
-                insaneCacheExp = 0;
-            }
+            if (dbExpired) { insaneDatabaseCache = null; insaneCacheExp = 0; }
 
             const forceUpdate = globalCacheCleared;
             if (forceUpdate) globalCacheCleared = false;
 
-            document.querySelectorAll('#insane-widget-main, .insane-widget-container').forEach(container => {
-                const modId  = container.dataset.modid;
-                const isCard = container.dataset.iscard === 'true';
-
+            // Otimização: Iterar pelo Set em vez de querySelectorAll
+            for (const container of activeWidgets) {
+                if (!document.documentElement.contains(container)) {
+                    activeWidgets.delete(container);
+                    continue;
+                }
+                
+                const modId = container.dataset.modid;
                 if (modId) {
                     const steamExpired = localSteamCache[modId] ? (now >= localSteamCache[modId].exp) : false;
                     if (steamExpired) delete steamDateCache[modId];
@@ -441,10 +404,10 @@
                             tooltipGlobal.classList.remove('show');
                             safeHidePopover(tooltipGlobal);
                         }
-                        renderWidget(container, modId, isCard);
+                        renderWidget(container, modId, container.dataset.iscard === 'true');
                     }
                 }
-            });
+            }
         }
     }, 1000);
 
@@ -456,6 +419,7 @@
             const tooltipWidth = tooltipGlobal.offsetWidth || 200, tooltipHeight = tooltipGlobal.offsetHeight || 100;
             if (left + tooltipWidth > window.innerWidth - 10) left = lastX - tooltipWidth - 15;
             if (top + tooltipHeight > window.innerHeight - 10) top = lastY - tooltipHeight - 15;
+            
             if (typeof tooltipGlobal.showPopover !== 'function') {
                 const dialogParent = element.closest('dialog');
                 if (dialogParent && window.getComputedStyle(dialogParent).transform !== 'none') {
@@ -466,6 +430,7 @@
         };
 
         element.addEventListener('mouseenter', (e) => {
+            if (!document.documentElement.contains(element)) return;
             lastX = e.clientX; lastY = e.clientY;
             hoverTimer = setTimeout(() => {
                 const dialogParent = element.closest('dialog');
@@ -499,20 +464,30 @@
     let steamQueueTimeout = null;
     let steamCallbacks = new Map();
 
+    // Otimização: Limitador de tamanho do cache da Steam inserido
+    function saveSteamCache() {
+        const now = Date.now();
+        let size = 0;
+        for (const id in localSteamCache) {
+            if (localSteamCache[id].exp < now) delete localSteamCache[id];
+            else size++;
+        }
+        if (size > 5000) {
+            const entries = Object.entries(localSteamCache).sort((a, b) => a[1].exp - b[1].exp);
+            for(let i = 0; i < entries.length - 5000; i++) delete localSteamCache[entries[i][0]];
+        }
+        saveCacheSafely('Paralives_SteamCache', localSteamCache);
+    }
+
     try {
         const stored = localStorage.getItem('Paralives_SteamCache');
         if (stored) {
             const parsed = JSON.parse(stored);
             const now = Date.now();
-            let changed = false;
             for (const id in parsed) {
-                if (parsed[id] && parsed[id].exp && now < parsed[id].exp) {
-                    localSteamCache[id] = parsed[id];
-                } else {
-                    changed = true;
-                }
+                if (parsed[id] && parsed[id].exp && now < parsed[id].exp) localSteamCache[id] = parsed[id];
             }
-            if (changed) saveCacheSafely('Paralives_SteamCache', localSteamCache);
+            saveSteamCache();
         }
     } catch(e) {}
 
@@ -529,15 +504,10 @@
             steamDateCache[id] = STEAM_FETCH_ERROR;
             localSteamCache[id] = { date: STEAM_FETCH_ERROR, exp: now + CACHE_TIME_STEAM_MS };
             pendingSteamIDs.delete(id);
-
-            if (steamCallbacks.has(id)) {
-                steamCallbacks.get(id).forEach(cb => cb());
-                steamCallbacks.delete(id);
-            }
+            if (steamCallbacks.has(id)) { steamCallbacks.get(id).forEach(cb => cb()); steamCallbacks.delete(id); }
         });
-        saveCacheSafely('Paralives_SteamCache', localSteamCache);
-        isFetchingBatch = false; 
-        triggerSteamFetch();
+        saveSteamCache();
+        isFetchingBatch = false; triggerSteamFetch();
     }
 
     function processSteamQueue() {
@@ -545,19 +515,18 @@
 
         isFetchingBatch = true;
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
-        let dataString = `itemcount=${idsToFetch.length}`;
-        idsToFetch.forEach((id, index) => dataString += `&publishedfileids[${index}]=${id}`);
+        
+        const formData = new URLSearchParams();
+        formData.append('itemcount', idsToFetch.length.toString());
+        idsToFetch.forEach((id, index) => formData.append(`publishedfileids[${index}]`, id));
 
         GM_xmlhttpRequest({
             method: 'POST', 
             url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
-            data: dataString, 
+            data: formData.toString(), 
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             onload: function(response) {
-                if (response.status !== 200) {
-                    handleSteamError(idsToFetch);
-                    return;
-                }
+                if (response.status !== 200) return handleSteamError(idsToFetch);
 
                 const now = Date.now();
                 const handledIds = new Set();
@@ -579,10 +548,7 @@
                             }
                         });
                     }
-                } catch(e) {
-                    handleSteamError(idsToFetch);
-                    return;
-                }
+                } catch(e) { return handleSteamError(idsToFetch); }
 
                 idsToFetch.forEach(id => {
                     if (!handledIds.has(id)) {
@@ -590,20 +556,13 @@
                         localSteamCache[id] = { date: STEAM_NO_DATE, exp: now + CACHE_TIME_STEAM_MS };
                     }
                     pendingSteamIDs.delete(id);
-
-                    if (steamCallbacks.has(id)) {
-                        steamCallbacks.get(id).forEach(cb => cb());
-                        steamCallbacks.delete(id);
-                    }
+                    if (steamCallbacks.has(id)) { steamCallbacks.get(id).forEach(cb => cb()); steamCallbacks.delete(id); }
                 });
 
-                saveCacheSafely('Paralives_SteamCache', localSteamCache);
-                isFetchingBatch = false; 
-                triggerSteamFetch();
+                saveSteamCache();
+                isFetchingBatch = false; triggerSteamFetch();
             },
-            onerror: () => {
-                handleSteamError(idsToFetch);
-            }
+            onerror: () => handleSteamError(idsToFetch)
         });
     }
 
@@ -618,14 +577,11 @@
             if (Array.isArray(parsed)) return text;
             if (parsed[variableName]) return JSON.stringify(parsed[variableName]);
         } catch (e) {}
-
         const regex = new RegExp(`(?:const|let|var)\\s+${variableName}\\s*=\\s*\\[`);
         const match = text.match(regex);
         if (!match) return null;
-
         const startIdx = match.index + match[0].length - 1;
         let depth = 0;
-
         for (let i = startIdx; i < text.length; i++) {
             if (text[i] === '[') depth++;
             else if (text[i] === ']') {
@@ -637,10 +593,7 @@
     }
 
     function fetchInsaneData(callback) {
-        if (insaneDatabaseCache !== null && Date.now() < insaneCacheExp) {
-            callback(insaneDatabaseCache);
-            return;
-        }
+        if (insaneDatabaseCache !== null && Date.now() < insaneCacheExp) return callback(insaneDatabaseCache);
 
         try {
             const stored = localStorage.getItem('Paralives_InsaneCache');
@@ -648,9 +601,8 @@
                 const parsed = JSON.parse(stored);
                 if (parsed && parsed.data && parsed.exp && Date.now() < parsed.exp) {
                     insaneDatabaseCache = parsed.data;
-                    insaneCacheExp     = parsed.exp;
-                    callback(insaneDatabaseCache);
-                    return;
+                    insaneCacheExp = parsed.exp;
+                    return callback(insaneDatabaseCache);
                 }
             }
         } catch(e) {}
@@ -663,8 +615,6 @@
             method: "GET", url: "https://insane.x10.mx/paralives.php?_t=" + Date.now(),
             onload: function(response) {
                 let success = false;
-                
-                // Melhoria Inteligente: Validação total (status HTTP e integridade do JSON)
                 if (response.status === 200) {
                     try {
                         const jsonString = extractJsonArray(response.responseText, 'allMods');
@@ -680,10 +630,7 @@
                                 });
 
                                 insaneCacheExp = Date.now() + CACHE_TIME_INSANE_MS;
-                                saveCacheSafely('Paralives_InsaneCache', {
-                                    data: insaneDatabaseCache,
-                                    exp:  insaneCacheExp
-                                });
+                                saveCacheSafely('Paralives_InsaneCache', { data: insaneDatabaseCache, exp: insaneCacheExp });
                                 success = true;
                             }
                         }
@@ -693,21 +640,15 @@
                 if (success) {
                     fetchQueue.forEach(cb => cb(insaneDatabaseCache));
                 } else {
-                    insaneDatabaseCache = null;
-                    insaneCacheExp = 0;
-                    // Força retorno nulo ativando o modo de falha (DB Error) real.
+                    insaneDatabaseCache = null; insaneCacheExp = 0;
                     fetchQueue.forEach(cb => cb(null));
                 }
                 
-                fetchQueue = [];
-                isFetchingInsane = false;
+                fetchQueue = []; isFetchingInsane = false;
             },
             onerror: () => {
-                insaneDatabaseCache = null;
-                insaneCacheExp = 0;
-                fetchQueue.forEach(cb => cb(null)); 
-                fetchQueue = [];
-                isFetchingInsane = false;
+                insaneDatabaseCache = null; insaneCacheExp = 0;
+                fetchQueue.forEach(cb => cb(null)); fetchQueue = []; isFetchingInsane = false;
             }
         });
     }
@@ -731,20 +672,28 @@
                 const creationTimeInsane = insaneCacheExp ? (insaneCacheExp - CACHE_TIME_INSANE_MS) : Date.now();
                 const strInsaneCache = formatCacheAge(Date.now() - creationTimeInsane);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
+                
+                // Melhoria Visual: Status do Cache alinhado em grid para limpeza do Layout
                 const cacheInfoHtml = `
-                    <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
-                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
-                            <span>${t.labelCache}</span>
-                            <span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
+                    <div class="insane-tooltip-row" style="margin-top: 10px; border-top: 1px solid #3d4450; padding-top: 8px;">
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${t.labelCache}</span><span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
                         </div>
-                        <div class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</div>
+                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center;">
+                            <span style="color:#8f98a0; font-size:11px; text-align:right;">${t.cacheDB}</span>
+                            <span class="insane-tooltip-value" style="font-size:11px;">
+                                <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span>
+                                <span style="color:#455366; margin: 0 4px;">|</span>
+                                🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>
+                            </span>
+                        </div>
                     </div>`;
 
                 bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${cacheInfoHtml}`);
                 return;
             }
 
-            const modData   = db[modId];
+            const modData = db[modId];
             const dataInsane = parseDataInsane(modData.uploaded);
 
             function drawDateComparison() {
@@ -752,28 +701,19 @@
 
                 if (dataSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
                     const cachedVal = localSteamCache[modId].date;
-                    dataSteam = steamDateCache[modId] =
-                        (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR)
-                            ? cachedVal
-                            : new Date(cachedVal);
+                    dataSteam = steamDateCache[modId] = (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR) ? cachedVal : new Date(cachedVal);
                 }
 
                 if (dataSteam === undefined) {
                     container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`;
                     pendingSteamIDs.add(modId);
-
                     if (!steamCallbacks.has(modId)) steamCallbacks.set(modId, new Set());
                     steamCallbacks.get(modId).add(drawDateComparison);
-
                     triggerSteamFetch();
                     return;
                 }
 
-                let steamCacheExp = 0;
-                if (localSteamCache[modId] && localSteamCache[modId].exp) {
-                    steamCacheExp = localSteamCache[modId].exp;
-                }
-
+                const steamCacheExp = localSteamCache[modId] ? localSteamCache[modId].exp : 0;
                 const creationTimeSteam = steamCacheExp ? (steamCacheExp - CACHE_TIME_STEAM_MS) : Date.now();
                 const creationTimeInsane = insaneCacheExp ? (insaneCacheExp - CACHE_TIME_INSANE_MS) : Date.now();
 
@@ -782,22 +722,31 @@
                 const strInsaneCache = formatCacheAge(Date.now() - creationTimeInsane);
                 const strInsaneReset = formatTimeLeft(insaneCacheExp);
 
+                // Melhoria Visual: Status do Cache alinhado em grid de 2 colunas com o Pipe separator
                 const cacheInfoHtml = `
-                    <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
-                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
-                            <span>${t.labelCache}</span>
-                            <span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
+                    <div class="insane-tooltip-row" style="margin-top: 10px; border-top: 1px solid #3d4450; padding-top: 8px;">
+                        <div style="color: #66c0f4; font-weight: bold; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${t.labelCache}</span><span class="insane-idle-status" style="font-size:11px; font-weight:normal;"></span>
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheSteam} <span class="insane-cache-age" data-created="${creationTimeSteam}">${strSteamCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>)</span>
-                            <span class="insane-tooltip-value" style="font-size:11px; color:#8f98a0;">${t.cacheDB} <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span> (🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>)</span>
+                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center;">
+                            <span style="color:#8f98a0; font-size:11px; text-align:right;">${t.cacheSteam}</span>
+                            <span class="insane-tooltip-value" style="font-size:11px;">
+                                <span class="insane-cache-age" data-created="${creationTimeSteam}">${strSteamCache}</span>
+                                <span style="color:#455366; margin: 0 4px;">|</span>
+                                🔄 <span class="insane-cache-countdown" data-exp="${steamCacheExp}">${strSteamReset}</span>
+                            </span>
+                            
+                            <span style="color:#8f98a0; font-size:11px; text-align:right;">${t.cacheDB}</span>
+                            <span class="insane-tooltip-value" style="font-size:11px;">
+                                <span class="insane-cache-age" data-created="${creationTimeInsane}">${strInsaneCache}</span>
+                                <span style="color:#455366; margin: 0 4px;">|</span>
+                                🔄 <span class="insane-cache-countdown" data-exp="${insaneCacheExp}">${strInsaneReset}</span>
+                            </span>
                         </div>
                     </div>`;
 
                 const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
-                const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR)
-                    ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
-                    : 'N/A';
+                const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR) ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
 
                 if (dataSteam === STEAM_FETCH_ERROR) {
                     container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
@@ -819,49 +768,48 @@
 
     function injectWidgets() {
         const urlStr = window.location.href;
+        
         if (urlStr.includes("/sharedfiles/filedetails") || urlStr.includes("/workshop/filedetails")) {
-            const modId = new URLSearchParams(window.location.search).get('id');
             const steamBtn = document.getElementById('SubscribeItemBtn');
-            const subscribeControls = steamBtn ? steamBtn.parentElement : null;
+            if (steamBtn && !steamBtn.dataset.paralivesInjected) {
+                const modId = new URLSearchParams(window.location.search).get('id');
+                const subscribeControls = steamBtn.parentElement;
 
-            if (modId && subscribeControls && !document.getElementById('insane-widget-main')) {
-                const gameArea = subscribeControls.parentElement;
-                if (gameArea && gameArea.classList.contains('game_area_purchase_game')) {
-                    gameArea.style.display         = 'flex';
-                    gameArea.style.flexWrap        = 'wrap';
-                    gameArea.style.alignItems      = 'center';
-                    gameArea.style.justifyContent  = 'space-between';
-                    gameArea.style.gap             = '15px';
-                    const titleH1 = gameArea.querySelector('h1');
-                    if (titleH1) {
-                        titleH1.style.float  = 'none';
-                        titleH1.style.width  = 'auto';
-                        titleH1.style.flex   = '1 1 auto';
-                        titleH1.style.margin = '0';
+                if (modId && subscribeControls) {
+                    steamBtn.dataset.paralivesInjected = 'true';
+                    const gameArea = subscribeControls.parentElement;
+                    if (gameArea && gameArea.classList.contains('game_area_purchase_game')) {
+                        gameArea.style.display = 'flex'; gameArea.style.flexWrap = 'wrap';
+                        gameArea.style.alignItems = 'center'; gameArea.style.justifyContent = 'space-between';
+                        gameArea.style.gap = '15px';
+                        const titleH1 = gameArea.querySelector('h1');
+                        if (titleH1) { titleH1.style.float = 'none'; titleH1.style.width = 'auto'; titleH1.style.flex = '1 1 auto'; titleH1.style.margin = '0'; }
                     }
+
+                    subscribeControls.style.float = 'none'; subscribeControls.style.display = 'flex';
+                    subscribeControls.style.flexWrap = 'wrap'; subscribeControls.style.alignItems = 'center';
+                    subscribeControls.style.justifyContent = 'flex-end'; subscribeControls.style.gap = '10px';
+                    steamBtn.style.flexShrink = '0'; steamBtn.style.margin = '0';
+
+                    const container = document.createElement('div');
+                    container.id = 'insane-widget-main';
+                    container.dataset.modid = modId;
+                    container.dataset.iscard = 'false';
+
+                    steamBtn.insertAdjacentElement('beforebegin', container);
+                    stopCardNav(container);
+                    activeWidgets.add(container);
+                    renderWidget(container, modId, false);
                 }
-
-                subscribeControls.style.float          = 'none';
-                subscribeControls.style.display        = 'flex';
-                subscribeControls.style.flexWrap       = 'wrap';
-                subscribeControls.style.alignItems     = 'center';
-                subscribeControls.style.justifyContent = 'flex-end';
-                subscribeControls.style.gap            = '10px';
-                steamBtn.style.flexShrink              = '0';
-                steamBtn.style.margin                  = '0';
-
-                const container = document.createElement('div');
-                container.id             = 'insane-widget-main';
-                container.dataset.modid  = modId;
-                container.dataset.iscard = 'false';
-
-                steamBtn.insertAdjacentElement('beforebegin', container);
-                stopCardNav(container);
-                renderWidget(container, modId, false);
             }
         }
 
-        document.querySelectorAll('h2 a[href*="sharedfiles/filedetails/?id="], h2 a[href*="workshop/filedetails/?id="]').forEach(titleLink => {
+        document.querySelectorAll('h2 a[href*="?id="]').forEach(titleLink => {
+            if (titleLink.dataset.paralivesInjected) return;
+            const href = titleLink.getAttribute('href');
+            if (!href.includes('sharedfiles/filedetails') && !href.includes('workshop/filedetails')) return;
+
+            titleLink.dataset.paralivesInjected = 'true';
             let modalRoot = titleLink;
             for(let i = 0; i < 6; i++) { if(modalRoot.parentElement) modalRoot = modalRoot.parentElement; }
 
@@ -871,62 +819,54 @@
             const anchor = subscribeBtn.closest('.tool-tip-source') || subscribeBtn;
             if (!anchor.parentElement.querySelector('.insane-widget-container')) {
                 const container = document.createElement('div');
-                container.className      = 'insane-widget-container';
-                container.style.marginRight = '8px';
-                container.dataset.modid  = new URL(titleLink.href).searchParams.get('id');
+                container.className = 'insane-widget-container'; container.style.marginRight = '8px';
+                container.dataset.modid = new URL(titleLink.href).searchParams.get('id');
                 container.dataset.iscard = 'false';
 
                 stopCardNav(container);
                 anchor.insertAdjacentElement('beforebegin', container);
-
+                activeWidgets.add(container);
                 if (container.dataset.modid) renderWidget(container, container.dataset.modid, false);
             }
         });
 
         document.querySelectorAll('.SVGIcon_MagnifyingGlass').forEach(zoomIcon => {
+            if (zoomIcon.dataset.paralivesInjected) return;
+            zoomIcon.dataset.paralivesInjected = 'true';
+
             const actionRow = (zoomIcon.closest('[role="button"]') || zoomIcon.parentElement)?.parentElement;
             if (!actionRow || actionRow.querySelector('.insane-widget-container')) return;
 
             let cardContainer = actionRow.parentElement, modLink = null;
             for (let i = 0; i < 5; i++) {
                 if (!cardContainer) break;
-                modLink = cardContainer.querySelector('a[href*="sharedfiles/filedetails/?id="], a[href*="workshop/filedetails/?id="]');
+                modLink = cardContainer.querySelector('a[href*="?id="]');
                 if (modLink) break;
                 cardContainer = cardContainer.parentElement;
             }
             if (!modLink || modLink.parentElement.tagName === 'H2') return;
+            const href = modLink.getAttribute('href');
+            if (!href.includes('sharedfiles/filedetails') && !href.includes('workshop/filedetails')) return;
 
-            actionRow.style.setProperty('opacity',    '1', 'important');
+            actionRow.style.setProperty('opacity', '1', 'important');
             actionRow.style.setProperty('visibility', 'visible', 'important');
-            actionRow.style.display    = 'flex';
-            actionRow.style.alignItems = 'center';
-            actionRow.style.gap        = '6px';
+            actionRow.style.display = 'flex'; actionRow.style.alignItems = 'center'; actionRow.style.gap = '6px';
 
             const container = document.createElement('div');
-            container.className      = 'insane-widget-container';
-            container.dataset.modid  = new URL(modLink.href).searchParams.get('id');
+            container.className = 'insane-widget-container';
+            container.dataset.modid = new URL(modLink.href).searchParams.get('id');
             container.dataset.iscard = 'true';
 
             stopCardNav(container);
             actionRow.prepend(container);
-
+            activeWidgets.add(container);
             if (container.dataset.modid) renderWidget(container, container.dataset.modid, true);
         });
     }
 
     let domCheckTimeout;
     const observer = new MutationObserver((mutations) => {
-        let hasElementNodes = false;
-        for (const mutation of mutations) {
-            for (let i = 0; i < mutation.addedNodes.length; i++) {
-                if (mutation.addedNodes[i].nodeType === Node.ELEMENT_NODE) {
-                    hasElementNodes = true;
-                    break;
-                }
-            }
-            if (hasElementNodes) break;
-        }
-
+        let hasElementNodes = mutations.some(m => Array.from(m.addedNodes).some(n => n.nodeType === 1));
         if (hasElementNodes) {
             clearTimeout(domCheckTimeout);
             domCheckTimeout = setTimeout(injectWidgets, 150);
