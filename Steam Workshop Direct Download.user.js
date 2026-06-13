@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.8
 // @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -9,6 +9,9 @@
 // @match        https://steamcommunity.com/app/*/workshop/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
+// @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      raw.githubusercontent.com
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
@@ -19,6 +22,17 @@
 
 (function() {
     'use strict';
+
+    // Carrega o valor salvo (padrão é 1, ou seja, cache ativado)
+    let showCacheInfo = GM_getValue('showCacheInfo', 1);
+
+    // Registra o menu de configuração
+    GM_registerMenuCommand(showCacheInfo ? '❌ Ocultar Info de Cache' : '✅ Mostrar Info de Cache', () => {
+        showCacheInfo = showCacheInfo ? 0 : 1;
+        GM_setValue('showCacheInfo', showCacheInfo);
+        alert('Configuração salva! A página será recarregada para aplicar as mudanças.');
+        window.location.reload();
+    });
 
     // ========================================================================
     // 1. CONFIGURAÇÃO DE JOGOS E BANCOS DE DADOS (MODULARIDADE)
@@ -144,7 +158,7 @@
                 return bestMatch;
             }
         }),
-        
+
         insane_php: (idUnique, phpFileName) => ({
             id: `insane_php_${idUnique}`,
             name: "Insane DB",
@@ -314,7 +328,7 @@
                         if (k && k.startsWith('SWDD_')) keysToRemove.push(k);
                     }
                     keysToRemove.forEach(k => localStorage.removeItem(k));
-                    
+
                     localStorage.setItem(key, JSON.stringify(dataObj));
                 } catch(err) {
                     console.error('[SWDD] Falha ao salvar no cache mesmo após limpeza preventiva.', err);
@@ -586,13 +600,14 @@
 
     function resetActivity() {
         if (!activityTimeout) {
+            const now = Date.now();
+            if (isIdleNow()) {
+                wasIdleRecently = true;
+                setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
+            }
+            lastActivityTime = now; // Atualização imediata do tempo
+
             activityTimeout = setTimeout(() => {
-                const now = Date.now();
-                if (isIdleNow()) {
-                    wasIdleRecently = true;
-                    setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
-                }
-                lastActivityTime = now;
                 activityTimeout = null;
             }, 1000);
         }
@@ -644,10 +659,6 @@
                     }
 
                     if ((dbExpired || steamExpired || forceUpdate) && !container.querySelector('.insane-state-loading')) {
-                        if (container.matches(':hover')) {
-                            tooltipGlobal.classList.remove('show');
-                            safeHidePopover(tooltipGlobal);
-                        }
                         renderWidget(container, modId, container.dataset.iscard === 'true');
                     }
                 }
@@ -1069,6 +1080,7 @@
             }
         }
 
+        // Bloco de informações de cache do Tooltip
         const cacheInfoHtml = `
             <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
                 <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
@@ -1080,9 +1092,21 @@
                 </div>
             </div>`;
 
+        // Verifica a configuração para renderizar ou omitir a parte do cache
+        const finalCacheHtml = showCacheInfo ? cacheInfoHtml : '';
+
         if (!dbResult || dbResult.notFound) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${GAME.forumUrl}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.requestMod}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${cacheInfoHtml}`);
+            const tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${finalCacheHtml}`;
+            bindTooltip(container.firstElementChild, tooltipHtmlStr);
+
+            // Força a atualização do tooltip se o mouse estiver em cima durante o render
+            if (container.matches(':hover')) {
+                tooltipGlobal.innerHTML = tooltipHtmlStr;
+                refreshTooltipTimers();
+                tooltipGlobal.classList.add('show');
+                safeShowPopover(tooltipGlobal);
+            }
             return;
         }
 
@@ -1103,7 +1127,7 @@
                 gridHtml += `<span class="insane-tooltip-label" style="margin:0; min-width:auto;">${t.labelSteam}</span><span class="insane-tooltip-value">${strSteam}</span>`;
             }
             if (showMirror) {
-                gridHtml += `<span class="insane-tooltip-label" style="color: #66c0f4; margin:0; min-width:auto;">${dbName}:</span><span class="insane-tooltip-value">${strInsane}</span>`;
+                gridHtml += `<span class="insane-tooltip-label" style="margin:0; min-width:auto;">${dbName}:</span><span class="insane-tooltip-value">${strInsane}</span>`;
             }
             if (infoLabel && infoValue) {
                 gridHtml += `<span class="insane-tooltip-label" style="margin:0; min-width:auto;">${infoLabel}</span><span class="insane-tooltip-value">${infoValue}</span>`;
@@ -1112,18 +1136,37 @@
             return gridHtml;
         };
 
+        let targetEl;
+        let tooltipHtmlStr;
+
         if (dataSteam === STEAM_FETCH_ERROR) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${getDatesGridHtml(false, true)}${cacheInfoHtml}`);
+            targetEl = container.querySelector('.insane-btn-group');
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${getDatesGridHtml(false, true)}${finalCacheHtml}`;
+            bindTooltip(targetEl, tooltipHtmlStr);
         } else if (!dataInsane) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${dbName} sem data</div>${getDatesGridHtml(false, false, 'Info:', t.mirrorNoDateTip)}${cacheInfoHtml}`);
+            targetEl = container.querySelector('.insane-btn-group');
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${dbName} sem data</div>${getDatesGridHtml(false, false, 'Info:', t.mirrorNoDateTip)}${finalCacheHtml}`;
+            bindTooltip(targetEl, tooltipHtmlStr);
         } else if (utils.isUpToDate(dataInsane, dataSteam)) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${getDatesGridHtml(true, true)}${cacheInfoHtml}`);
+            targetEl = container.firstElementChild;
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${getDatesGridHtml(true, true)}${finalCacheHtml}`;
+            bindTooltip(targetEl, tooltipHtmlStr);
         } else {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="true">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${getDatesGridHtml(true, true)}${cacheInfoHtml}`);
+            targetEl = container.querySelector('.insane-btn-group');
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${getDatesGridHtml(true, true)}${finalCacheHtml}`;
+            bindTooltip(targetEl, tooltipHtmlStr);
+        }
+
+        // Força a atualização do tooltip se o mouse estiver em cima durante o render (ex: retorno da ociosidade)
+        if (container.matches(':hover')) {
+            tooltipGlobal.innerHTML = tooltipHtmlStr;
+            refreshTooltipTimers();
+            tooltipGlobal.classList.add('show');
+            safeShowPopover(tooltipGlobal);
         }
     }
 
