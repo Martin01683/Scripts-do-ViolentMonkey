@@ -54,7 +54,7 @@
         modOutdated:     'MOD DESATUALIZADO',
         requestUpdate:   'Pedir Atualização no Fórum',
         labelSteam:      'Steam:',
-        labelInsane:     'Espelho:',
+        labelInsane:     'Mirror:',
         labelCache:      'Status do Cache:',
         cacheSteam:      'Steam:',
         cacheDB:         'Banco de Dados:',
