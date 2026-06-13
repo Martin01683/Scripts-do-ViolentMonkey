@@ -23,7 +23,7 @@
     // ========================================================================
     // 1. CONFIGURAÇÃO DE JOGOS E BANCOS DE DADOS (MODULARIDADE)
     // ========================================================================
-    
+
     const utils = {
         extractJsonArray: function(text, varName) {
             try {
@@ -58,13 +58,34 @@
         },
         parseSmodsDate: function(dateStr) {
             if (!dateStr) return null;
-            let normalized = dateStr.replace(/ at /i, ' ').trim();
-            if (!/\d{4}/.test(normalized)) {
-                const currentYear = new Date().getFullYear();
-                normalized = normalized.replace(/\b(\d{1,2}:\d{2})\b/, `${currentYear} $1`);
+            dateStr = String(dateStr).trim();
+
+            const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]{3,})\s+(?:at\s+)?(\d{1,2}):(\d{2})/i);
+            if (match) {
+                const day = parseInt(match[1], 10);
+                const monthStr = match[2].toLowerCase().substring(0, 3);
+                const hours = parseInt(match[3], 10);
+                const minutes = parseInt(match[4], 10);
+
+                const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+                const month = months[monthStr];
+
+                if (month !== undefined) {
+                    const currentYear = new Date().getFullYear();
+                    let parsedDate = new Date(Date.UTC(currentYear, month, day, hours + 3, minutes, 0));
+                    if (parsedDate.getTime() > Date.now()) {
+                        parsedDate.setUTCFullYear(currentYear - 1);
+                    }
+                    return parsedDate;
+                }
             }
-            const d = new Date(normalized + " -03:00");
-            return isNaN(d.getTime()) ? null : d;
+
+            const d1 = new Date(dateStr);
+            if (!isNaN(d1.getTime())) {
+                if (!/\d{2}:\d{2}/.test(dateStr)) d1.setHours(23, 59, 59, 999);
+                return d1;
+            }
+            return null;
         },
         getIdFromName: function(name) {
             const match = String(name || '').match(/^\s*(\d{6,})/);
@@ -73,155 +94,117 @@
         isUpToDate: function(dateMirror, dateSteam) {
             if (dateSteam === STEAM_NO_DATE || dateSteam === STEAM_FETCH_ERROR) return true;
             if (!dateMirror) return false;
-            // Corta os milissegundos e segundos para evitar "falso-desatualizado"
-            // (já que o site de mirror às vezes não fornece os segundos exatos de upload)
             const minMirror = Math.floor(dateMirror.getTime() / 60000);
             const minSteam = Math.floor(dateSteam.getTime() / 60000);
             return minMirror >= minSteam;
         }
     };
 
+    // ========================================================================
+    // 1.1 TEMPLATES DE BANCO DE DADOS (REUTILIZÁVEIS)
+    // ========================================================================
+    const DB_TEMPLATES = {
+        skymods: (appId) => ({
+            id: `smods_${appId}`,
+            name: "Skymods",
+            type: "per_mod",
+            url: (modId) => `https://catalogue.smods.ru/?s=${modId}&app=${appId}`,
+            cacheTime: 60 * 60 * 1000,
+            parser: (responseText, modId) => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(responseText, "text/html");
+
+                let bestMatch = null;
+                const posts = doc.querySelectorAll('.post-list article');
+
+                for (const post of posts) {
+                    const possibleDates = [];
+
+                    post.querySelectorAll('.updated, .published, .skymods-item-date').forEach(el => {
+                        const textOrAttr = el.getAttribute('datetime') || el.textContent;
+                        const d = utils.parseSmodsDate(textOrAttr);
+                        if (d && !isNaN(d.getTime())) possibleDates.push(d.getTime());
+                    });
+
+                    let finalDate = null;
+                    if (possibleDates.length > 0) {
+                        finalDate = new Date(Math.max(...possibleDates));
+                    }
+
+                    const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
+
+                    if (finalDate && linkEl) {
+                        const modData = { link: linkEl.href, date: finalDate };
+
+                        const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
+                        if (steamLink && steamLink.href.includes(modId)) return modData;
+                        if (!bestMatch) bestMatch = modData;
+                    }
+                }
+                return bestMatch;
+            }
+        }),
+        
+        insane_php: (idUnique, phpFileName) => ({
+            id: `insane_php_${idUnique}`,
+            name: "Insane DB",
+            type: "full_db",
+            url: `https://insane.x10.mx/${phpFileName}.php`,
+            cacheTime: 60 * 60 * 1000,
+            parser: (responseText) => {
+                const jsonString = utils.extractJsonArray(responseText, 'allMods');
+                if (!jsonString) throw new Error("Format error");
+                const parsedData = JSON.parse(jsonString);
+                const result = {};
+                parsedData.forEach(mod => {
+                    if (mod.name && (mod.link || mod.url)) {
+                        const idSteam = mod.name.match(/^(\d+)/);
+                        if (idSteam) result[idSteam[1]] = { link: mod.link || mod.url, date: utils.parseInsaneDate(mod.uploaded) };
+                    }
+                });
+                return result;
+            }
+        }),
+
+        github_json: (idUnique, jsonUrl) => ({
+            id: `github_${idUnique}`,
+            name: "GitHub",
+            type: "full_db",
+            url: jsonUrl,
+            cacheTime: 10 * 60 * 1000,
+            parser: (responseText) => {
+                const json = JSON.parse(responseText);
+                const files = Array.isArray(json?.files) ? json.files : [];
+                const result = {};
+                files.forEach(file => {
+                    const idSteam = utils.getIdFromName(file?.name);
+                    const link = file?.link || file?.url;
+                    if (idSteam && link) result[idSteam] = { link: link, date: utils.parseGithubDate(file.uploaded) };
+                });
+                return result;
+            }
+        })
+    };
+
+    // ========================================================================
+    // 1.2 REGISTRO DE JOGOS SUPORTADOS
+    // ========================================================================
     const GAMES_CONFIG = {
         '1118520': {
             name: "Paralives",
             forumUrl: "https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692",
             databases: [
-                {
-                    id: "github_main",
-                    name: "GitHub",
-                    type: "full_db",
-                    url: "https://raw.githubusercontent.com/AORUS834/947e26abefdb9eb0a9cd292d2ee691d9/refs/heads/main/files.json",
-                    cacheTime: 10 * 60 * 1000,
-                    parser: (responseText) => {
-                        const json = JSON.parse(responseText);
-                        const files = Array.isArray(json?.files) ? json.files : [];
-                        const result = {};
-                        files.forEach(file => {
-                            const idSteam = utils.getIdFromName(file?.name);
-                            const link = file?.link || file?.url;
-                            if (idSteam && link) result[idSteam] = { link: link, date: utils.parseGithubDate(file.uploaded) };
-                        });
-                        return result;
-                    }
-                },
-                {
-                    id: "insane_php",
-                    name: "Insane DB",
-                    type: "full_db",
-                    url: "https://insane.x10.mx/paralives.php",
-                    cacheTime: 60 * 60 * 1000,
-                    parser: (responseText) => {
-                        const jsonString = utils.extractJsonArray(responseText, 'allMods');
-                        if (!jsonString) throw new Error("Format error");
-                        const parsedData = JSON.parse(jsonString);
-                        const result = {};
-                        parsedData.forEach(mod => {
-                            if (mod.name && (mod.link || mod.url)) {
-                                const idSteam = mod.name.match(/^(\d+)/);
-                                if (idSteam) result[idSteam[1]] = { link: mod.link || mod.url, date: utils.parseInsaneDate(mod.uploaded) };
-                            }
-                        });
-                        return result;
-                    }
-                },
-                {
-                    id: "smods_ru",
-                    name: "Skymods",
-                    type: "per_mod",
-                    url: (modId) => `https://catalogue.smods.ru/?s=${modId}&app=1118520`,
-                    cacheTime: 60 * 60 * 1000,
-                    parser: (responseText, modId) => {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(responseText, "text/html");
-                        
-                        let bestMatch = null;
-                        const posts = doc.querySelectorAll('.post-list article');
-                        
-                        for (const post of posts) {
-                            const dateStrEl = post.querySelector('.skymods-item-date');
-                            // Busca o botão de download que joga para fora do site
-                            const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
-                            
-                            if (dateStrEl && linkEl) {
-                                const modData = { 
-                                    link: linkEl.href, 
-                                    date: utils.parseSmodsDate(dateStrEl.textContent) 
-                                };
-                                
-                                // Verifica se esse resultado da busca bate exatamente com a página original da Steam do nosso mod
-                                const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
-                                if (steamLink && steamLink.href.includes(modId)) {
-                                    return modData; // Correspondência exata encontrada
-                                }
-                                
-                                if (!bestMatch) bestMatch = modData; // Salva o primeiro como fallback se nenhum link bater
-                            }
-                        }
-                        return bestMatch;
-                    }
-                }
+                DB_TEMPLATES.github_json('paralives', 'https://raw.githubusercontent.com/AORUS834/947e26abefdb9eb0a9cd292d2ee691d9/refs/heads/main/files.json'),
+                DB_TEMPLATES.insane_php('paralives', 'paralives'),
+                DB_TEMPLATES.skymods('1118520')
             ]
         },
         '3450310': {
             name: "Europa Universalis V",
             forumUrl: "https://cs.rin.ru/forum/viewtopic.php?f=10&t=152865",
             databases: [
-                {
-                    id: "insane_php_eu5",
-                    name: "Insane DB",
-                    type: "full_db",
-                    url: "https://insane.x10.mx/eu5.php",
-                    cacheTime: 60 * 60 * 1000,
-                    parser: (responseText) => {
-                        const jsonString = utils.extractJsonArray(responseText, 'allMods');
-                        if (!jsonString) throw new Error("Format error");
-                        const parsedData = JSON.parse(jsonString);
-                        const result = {};
-                        parsedData.forEach(mod => {
-                            if (mod.name && (mod.link || mod.url)) {
-                                const idSteam = mod.name.match(/^(\d+)/);
-                                if (idSteam) result[idSteam[1]] = { link: mod.link || mod.url, date: utils.parseInsaneDate(mod.uploaded) };
-                            }
-                        });
-                        return result;
-                    }
-                },
-				{
-                    id: "smods_ru_eu5",
-                    name: "Skymods",
-                    type: "per_mod",
-                    url: (modId) => `https://catalogue.smods.ru/?s=${modId}&app=3450310`,
-                    cacheTime: 60 * 60 * 1000,
-                    parser: (responseText, modId) => {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(responseText, "text/html");
-                        
-                        let bestMatch = null;
-                        const posts = doc.querySelectorAll('.post-list article');
-                        
-                        for (const post of posts) {
-                            const dateStrEl = post.querySelector('.skymods-item-date');
-                            // Busca o botão de download que joga para fora do site
-                            const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
-                            
-                            if (dateStrEl && linkEl) {
-                                const modData = { 
-                                    link: linkEl.href, 
-                                    date: utils.parseSmodsDate(dateStrEl.textContent) 
-                                };
-                                
-                                // Verifica se esse resultado da busca bate exatamente com a página original da Steam do nosso mod
-                                const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
-                                if (steamLink && steamLink.href.includes(modId)) {
-                                    return modData; // Correspondência exata encontrada
-                                }
-                                
-                                if (!bestMatch) bestMatch = modData; // Salva o primeiro como fallback se nenhum link bater
-                            }
-                        }
-                        return bestMatch;
-                    }
-                }
+                DB_TEMPLATES.insane_php('eu5', 'eu5'),
+                DB_TEMPLATES.skymods('3450310')
             ]
         }
     };
@@ -268,7 +251,7 @@
         zh: { loading: '⏳ 正在查找...', checkingVersion: '⏳ 正在检查版本...', dbError: '⚠️ 数据库错误', requestMod: '➕ 请求 Mod', modNotListed: 'Mod 未收录。点击请求。', download: '✅ 下载', downloadWarning: '⚠️ 下载', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已过期', requestUpdate: '在论坛请求更新', labelSteam: 'Steam:', labelInsane: '镜像:', labelCache: '缓存状态:', cacheSteam: 'Steam:', cacheDB: '数据库:', justNow: '刚刚', minAgo: '分钟前', steamError: '⚠️ 未验证', steamErrorTip: 'Steam API 无法访问。版本未验证。', mirrorNoDate: '⚠️ 镜像无日期', mirrorNoDateTip: '无法验证镜像版本。', updateCache: '🔄 更新缓存', cacheCooldown: '⏳ 更新缓存 ({s}s)', idlePaused: '⏸️ 已暂停（空闲）', idleActive: '🟢 活跃' },
         zh_tw: { loading: '⏳ 正在尋找...', checkingVersion: '⏳ 正在檢查版本...', dbError: '⚠️ 資料庫錯誤', requestMod: '➕ 請求 Mod', modNotListed: 'Mod 未收錄。點擊請求。', download: '✅ 下載', downloadWarning: '⚠️ 下載', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已過期', requestUpdate: '在論壇請求更新', labelSteam: 'Steam:', labelInsane: '鏡像:', labelCache: '快取狀態:', cacheSteam: 'Steam:', cacheDB: '資料庫:', justNow: '剛剛', minAgo: '分鐘前', steamError: '⚠️ 未驗證', steamErrorTip: 'Steam API 無法訪問。版本未驗證。', mirrorNoDate: '⚠️ 鏡像無日期', mirrorNoDateTip: '無法驗證鏡像版本。', updateCache: '🔄 更新快取', cacheCooldown: '⏳ 更新快取 ({s}s)', idlePaused: '⏸️ 已暫停（閒置）', idleActive: '🟢 活躍' },
         ja: { loading: '⏳ 検索中...', checkingVersion: '⏳ バージョン確認中...', dbError: '⚠️ DBエラー', requestMod: '➕ Modをリクエスト', modNotListed: 'Modが未登録です。クリックしてリクエスト。', download: '✅ ダウンロード', downloadWarning: '⚠️ ダウンロード', modUpdated: 'MODは最新です', modOutdated: 'MODは古い可能性があります', requestUpdate: 'フォーラムで更新をリクエスト', labelSteam: 'Steam:', labelInsane: 'ミラー:', labelCache: 'キャッシュ状態:', cacheSteam: 'Steam:', cacheDB: 'データベース:', justNow: 'たった今', minAgo: '分前', steamError: '⚠️ 未検証', steamErrorTip: 'Steam APIにアクセスできません。バージョン未検証。', mirrorNoDate: '⚠️ 日付のないミラー', mirrorNoDateTip: 'ミラーのバージョンを確認できませんでした。', updateCache: '🔄 キャッシュを更新', cacheCooldown: '⏳ キャッシュ更新 ({s}s)', idlePaused: '⏸️ 一時停止（アイドル）', idleActive: '🟢 アクティブ' },
-        ko: { loading: '⏳ 검색 중...', checkingVersion: '⏳ 버전 확인 중...', dbError: '⚠️ DB 오류', requestMod: '➕ 모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '✅ 다운로드', downloadWarning: '⚠️ 다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '포럼에서 업데이트 요청', labelSteam: 'Steam:', labelInsane: '미러:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', cacheDB: '데이터베이스:', justNow: '방금', minAgo: '분 전', steamError: '⚠️ 확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '⚠️ 날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', updateCache: '🔄 캐시 업데이트', 캐시Cooldown: '⏳ 캐시 업데이트 ({s}s)', idlePaused: '⏸️ 일시 정지 (유휴)', idleActive: '🟢 활성' }
+        ko: { loading: '⏳ 검색 중...', checkingVersion: '⏳ 버전 확인 중...', dbError: '⚠️ DB 오류', requestMod: '➕ 모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '✅ 다운로드', downloadWarning: '⚠️ 다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '포럼에서 업데이트 요청', labelSteam: 'Steam:', labelInsane: '미러:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', cacheDB: '데이터베이스:', justNow: '방금', minAgo: '분 전', steamError: '⚠️ 확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '⚠️ 날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', updateCache: '🔄 캐시 업데이트', cacheCooldown: '⏳ 캐시 업데이트 ({s}s)', idlePaused: '⏸️ 일시 정지 (유휴)', idleActive: '🟢 활성' }
     };
 
     const languageAliases = {
@@ -323,7 +306,19 @@
             localStorage.setItem(key, JSON.stringify(dataObj));
         } catch(e) {
             if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-                try { localStorage.removeItem(key); localStorage.setItem(key, JSON.stringify(dataObj)); } catch(err) {}
+                try {
+                    console.warn('[SWDD] LocalStorage cheio. Limpando dados do script...');
+                    const keysToRemove = [];
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('SWDD_')) keysToRemove.push(k);
+                    }
+                    keysToRemove.forEach(k => localStorage.removeItem(k));
+                    
+                    localStorage.setItem(key, JSON.stringify(dataObj));
+                } catch(err) {
+                    console.error('[SWDD] Falha ao salvar no cache mesmo após limpeza preventiva.', err);
+                }
             }
         }
     }
@@ -425,14 +420,12 @@
             if (Date.now() >= globalCacheCooldown) {
                 setGlobalCacheCooldown(30000);
 
-                // Limpa Steam Cache
                 localStorage.removeItem(STEAM_CACHE_KEY);
                 steamDateCache = {};
                 localSteamCache = {};
                 pendingSteamIDs.clear();
                 steamCallbacks.clear();
 
-                // Limpa todos os DB Caches do Jogo atual (lidando com "full_db" e "per_mod")
                 GAME.databases.forEach(db => {
                     if (db.type === 'per_mod') {
                         const prefix = `${CACHE_PREFIX}DB_${db.id}_`;
@@ -450,12 +443,12 @@
                         if (memoryDBCache[db.id]) memoryDBCache[db.id].exp = 0;
                     }
                 });
-                
+
                 updateDropdownCacheText();
                 dropdownGlobal.classList.remove('show');
                 safeHidePopover(dropdownGlobal);
                 dropdownGlobal.lastArrow = null;
-                
+
                 for (const container of activeWidgets) {
                     if (container.dataset.modid) renderWidget(container, container.dataset.modid, container.dataset.iscard === 'true');
                 }
@@ -505,7 +498,7 @@
                 ${showForum ? `<a href="${GAME.forumUrl}" rel="noopener noreferrer" class="insane-bg-link"><span>💬</span> ${forumText}</a>` : ''}
             `;
             updateDropdownCacheText();
-            
+
             dropdownGlobal.style.top = topPos + 'px'; dropdownGlobal.style.left = leftPos + 'px';
             dropdownGlobal.classList.add('show'); safeShowPopover(dropdownGlobal); dropdownGlobal.lastArrow = arrowBtn;
             return;
@@ -516,12 +509,12 @@
         }
     }, true);
 
-    window.addEventListener('scroll', () => { 
+    window.addEventListener('scroll', () => {
         if (dropdownGlobal.classList.contains('show')) {
-            dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null; 
+            dropdownGlobal.classList.remove('show'); safeHidePopover(dropdownGlobal); dropdownGlobal.lastArrow = null;
         }
         if (tooltipGlobal.classList.contains('show')) {
-            clearTimeout(hoverTimer); tooltipGlobal.classList.remove('show'); safeHidePopover(tooltipGlobal); 
+            clearTimeout(hoverTimer); tooltipGlobal.classList.remove('show'); safeHidePopover(tooltipGlobal);
         }
     }, { passive: true });
 
@@ -542,8 +535,8 @@
 
         const idleStatusEl = tooltipGlobal.querySelector('.insane-idle-status');
         if (idleStatusEl) {
-            idleStatusEl.innerHTML = (isIdleNow() || wasIdleRecently) 
-                ? `<span style="color:#F59E0B">${t.idlePaused}</span>` 
+            idleStatusEl.innerHTML = (isIdleNow() || wasIdleRecently)
+                ? `<span style="color:#F59E0B">${t.idlePaused}</span>`
                 : `<span style="color:#A3E33B">${t.idleActive}</span>`;
         }
     }
@@ -555,18 +548,15 @@
     let globalCacheCleared = false;
 
     window.addEventListener('storage', (e) => {
-        // Sincroniza o cooldown global
         if (e.key === `${CACHE_PREFIX}Cooldown`) {
             globalCacheCooldown = parseInt(e.newValue, 10) || 0;
             if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
         }
-        // Sincroniza a limpeza do cache da Steam
         if (e.key === STEAM_CACHE_KEY && e.newValue === null) {
             steamDateCache = {};
             localSteamCache = {};
             globalCacheCleared = true;
         }
-        // Sincroniza a limpeza dos bancos de dados modulares
         if (e.key && e.key.startsWith(`${CACHE_PREFIX}DB_`) && e.newValue === null) {
             GAME.databases.forEach(db => {
                 if (db.type === 'per_mod') {
@@ -590,7 +580,7 @@
     const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
     let lastActivityTime = Date.now();
     let activityTimeout;
-    let wasIdleRecently = false; 
+    let wasIdleRecently = false;
 
     function isIdleNow() { return (Date.now() - lastActivityTime) > IDLE_TIMEOUT_MS; }
 
@@ -604,7 +594,7 @@
                 }
                 lastActivityTime = now;
                 activityTimeout = null;
-            }, 1000); 
+            }, 1000);
         }
     }
 
@@ -624,12 +614,12 @@
                     activeWidgets.delete(container);
                     continue;
                 }
-                
+
                 const modId = container.dataset.modid;
                 if (modId) {
                     const steamExpired = localSteamCache[modId] ? (now >= localSteamCache[modId].exp) : false;
                     if (steamExpired) delete steamDateCache[modId];
-                    
+
                     let dbExpired = false;
                     if (container.dataset.activeDbIds) {
                         try {
@@ -673,7 +663,7 @@
             const tooltipWidth = tooltipGlobal.offsetWidth || 200, tooltipHeight = tooltipGlobal.offsetHeight || 100;
             if (left + tooltipWidth > window.innerWidth - 10) left = lastX - tooltipWidth - 15;
             if (top + tooltipHeight > window.innerHeight - 10) top = lastY - tooltipHeight - 15;
-            
+
             if (typeof tooltipGlobal.showPopover !== 'function') {
                 const dialogParent = element.closest('dialog');
                 if (dialogParent && window.getComputedStyle(dialogParent).transform !== 'none') {
@@ -689,7 +679,7 @@
             hoverTimer = setTimeout(() => {
                 const dialogParent = element.closest('dialog');
                 if (dialogParent) dialogParent.appendChild(tooltipGlobal); else document.body.appendChild(tooltipGlobal);
-                
+
                 tooltipGlobal.innerHTML = htmlContent;
                 refreshTooltipTimers();
 
@@ -772,15 +762,15 @@
 
         isFetchingBatch = true;
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
-        
+
         const formData = new URLSearchParams();
         formData.append('itemcount', idsToFetch.length.toString());
         idsToFetch.forEach((id, index) => formData.append(`publishedfileids[${index}]`, id));
 
         GM_xmlhttpRequest({
-            method: 'POST', 
+            method: 'POST',
             url: 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
-            data: formData.toString(), 
+            data: formData.toString(),
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             onload: function(response) {
                 if (response.status !== 200) return handleSteamError(idsToFetch);
@@ -843,8 +833,8 @@
         });
     }
 
-    const memoryDBCache = {}; 
-    const pendingDBRequests = {}; 
+    const memoryDBCache = {};
+    const pendingDBRequests = {};
 
     function fetchDatabaseAsync(dbConfig, modId = null) {
         if (dbConfig.type === 'per_mod') {
@@ -853,7 +843,7 @@
             const now = Date.now();
 
             if (!memoryDBCache[dbConfig.id]) memoryDBCache[dbConfig.id] = {};
-            
+
             if (memoryDBCache[dbConfig.id][modId] && memoryDBCache[dbConfig.id][modId].exp > now) {
                 return Promise.resolve(memoryDBCache[dbConfig.id][modId]);
             }
@@ -886,7 +876,7 @@
                                 const parsedData = dbConfig.parser(res.responseText, modId);
                                 const exp = now + dbConfig.cacheTime;
                                 const cacheObj = { data: parsedData, exp: exp, creation: now };
-                                
+
                                 memoryDBCache[dbConfig.id][modId] = cacheObj;
                                 saveCacheSafely(cacheKey, cacheObj);
                                 delete pendingDBRequests[requestKey];
@@ -909,7 +899,6 @@
             return requestPromise;
 
         } else {
-            // Banco Full (Puxa tudo e guarda)
             const cacheKey = `${CACHE_PREFIX}DB_${dbConfig.id}`;
             const now = Date.now();
 
@@ -947,7 +936,7 @@
                                 const parsedData = dbConfig.parser(res.responseText);
                                 const exp = now + dbConfig.cacheTime;
                                 const cacheObj = { data: parsedData, exp: exp, creation: now };
-                                
+
                                 memoryDBCache[dbConfig.id] = cacheObj;
                                 saveCacheSafely(cacheKey, cacheObj);
                                 delete pendingDBRequests[dbConfig.id];
@@ -990,8 +979,7 @@
                     modData = dbCacheObj.data[modId];
                 }
             }
-            
-            // Registra que esse banco foi consultado para aparecer no tooltip dinâmico
+
             if (dbCacheObj) {
                 consultedDBs.push({
                     id: dbConfig.id,
@@ -1011,20 +999,20 @@
 
             if (modData) {
                 const dataInsane = modData.date;
-                
+
                 let isUpdated = false;
                 if (dataSteam === STEAM_NO_DATE || dataSteam === STEAM_FETCH_ERROR) {
                     isUpdated = true;
                 } else if (!dataInsane) {
-                    isUpdated = false; 
+                    isUpdated = false;
                 } else if (utils.isUpToDate(dataInsane, dataSteam)) {
                     isUpdated = true;
                 }
 
                 if (isUpdated) {
-                    return { 
+                    return {
                         dbId: dbConfig.id,
-                        dbName: dbConfig.name, 
+                        dbName: dbConfig.name,
                         modData: modData,
                         exp: dbCacheObj.exp,
                         creation: dbCacheObj.creation,
@@ -1107,21 +1095,35 @@
         const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
         const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR) ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
 
-        const steamRowHtml = `<div class="insane-tooltip-row"><span class="insane-tooltip-label">${t.labelSteam}</span> <span class="insane-tooltip-value">${strSteam}</span></div>`;
-        const mirrorRowHtml = `<div class="insane-tooltip-row"><span class="insane-tooltip-label" style="color: #66c0f4;">${dbName}:</span> <span class="insane-tooltip-value">${strInsane}</span></div>`;
+        const safeLink = (modData.link && (modData.link.startsWith('http://') || modData.link.startsWith('https://'))) ? modData.link : '#';
+
+        const getDatesGridHtml = (showSteam, showMirror, infoLabel, infoValue) => {
+            let gridHtml = `<div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; row-gap: 4px; margin: 6px 0;">`;
+            if (showSteam) {
+                gridHtml += `<span class="insane-tooltip-label" style="margin:0; min-width:auto;">${t.labelSteam}</span><span class="insane-tooltip-value">${strSteam}</span>`;
+            }
+            if (showMirror) {
+                gridHtml += `<span class="insane-tooltip-label" style="color: #66c0f4; margin:0; min-width:auto;">${dbName}:</span><span class="insane-tooltip-value">${strInsane}</span>`;
+            }
+            if (infoLabel && infoValue) {
+                gridHtml += `<span class="insane-tooltip-label" style="margin:0; min-width:auto;">${infoLabel}</span><span class="insane-tooltip-value">${infoValue}</span>`;
+            }
+            gridHtml += `</div>`;
+            return gridHtml;
+        };
 
         if (dataSteam === STEAM_FETCH_ERROR) {
-            container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${mirrorRowHtml}${cacheInfoHtml}`);
+            container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
+            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${getDatesGridHtml(false, true)}${cacheInfoHtml}`);
         } else if (!dataInsane) {
-            container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${dbName} sem data</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">Info:</span> <span class="insane-tooltip-value">${t.mirrorNoDateTip}</span></div>${cacheInfoHtml}`);
+            container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
+            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${dbName} sem data</div>${getDatesGridHtml(false, false, 'Info:', t.mirrorNoDateTip)}${cacheInfoHtml}`);
         } else if (utils.isUpToDate(dataInsane, dataSteam)) {
-            container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
-            bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${steamRowHtml}${mirrorRowHtml}${cacheInfoHtml}`);
+            container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
+            bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${getDatesGridHtml(true, true)}${cacheInfoHtml}`);
         } else {
-            container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="true">▼</button></div>`;
-            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${steamRowHtml}${mirrorRowHtml}${cacheInfoHtml}`);
+            container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="true">▼</button></div>`;
+            bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${getDatesGridHtml(true, true)}${cacheInfoHtml}`);
         }
     }
 
@@ -1131,7 +1133,7 @@
 
     function injectWidgets() {
         const urlStr = window.location.href;
-        
+
         if (urlStr.includes("/sharedfiles/filedetails") || urlStr.includes("/workshop/filedetails")) {
             const steamBtn = document.getElementById('SubscribeItemBtn');
             if (steamBtn && !steamBtn.dataset.swddInjected) {
@@ -1228,6 +1230,7 @@
     }
 
     let domCheckTimeout;
+    const observerTarget = document.body || document.documentElement;
     const observer = new MutationObserver((mutations) => {
         let hasElementNodes = mutations.some(m => Array.from(m.addedNodes).some(n => n.nodeType === 1));
         if (hasElementNodes) {
@@ -1236,7 +1239,7 @@
         }
     });
 
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(observerTarget, { childList: true, subtree: true });
     injectWidgets();
 
 })();
