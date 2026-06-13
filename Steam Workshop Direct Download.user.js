@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.4
-// @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados
+// @version      0.5
+// @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -47,7 +47,6 @@
         },
         parseInsaneDate: function(dateStr) {
             if (!dateStr || dateStr.startsWith('0000-00-00')) return null;
-            // InsaneDB salva as datas em Horário Central Europeu (CET / UTC+1)
             const d = new Date(dateStr.replace(' ', 'T') + '+01:00');
             return isNaN(d.getTime()) ? null : d;
         },
@@ -64,13 +63,21 @@
                 const currentYear = new Date().getFullYear();
                 normalized = normalized.replace(/\b(\d{1,2}:\d{2})\b/, `${currentYear} $1`);
             }
-            // Skymods (smods.ru) processa e salva os timestamps da Steam em UTC-3
             const d = new Date(normalized + " -03:00");
             return isNaN(d.getTime()) ? null : d;
         },
         getIdFromName: function(name) {
             const match = String(name || '').match(/^\s*(\d{6,})/);
             return match ? match[1] : null;
+        },
+        isUpToDate: function(dateMirror, dateSteam) {
+            if (dateSteam === STEAM_NO_DATE || dateSteam === STEAM_FETCH_ERROR) return true;
+            if (!dateMirror) return false;
+            // Corta os milissegundos e segundos para evitar "falso-desatualizado"
+            // (já que o site de mirror às vezes não fornece os segundos exatos de upload)
+            const minMirror = Math.floor(dateMirror.getTime() / 60000);
+            const minSteam = Math.floor(dateSteam.getTime() / 60000);
+            return minMirror >= minSteam;
         }
     };
 
@@ -161,7 +168,7 @@
             databases: [
                 {
                     id: "insane_php_eu5",
-                    name: "Insane DB",
+                    name: "Insane DB (EU5)",
                     type: "full_db",
                     url: "https://insane.x10.mx/eu5.php",
                     cacheTime: 60 * 60 * 1000,
@@ -974,7 +981,7 @@
                     isUpdated = true;
                 } else if (!dataInsane) {
                     isUpdated = false; 
-                } else if (dataInsane >= dataSteam) {
+                } else if (utils.isUpToDate(dataInsane, dataSteam)) {
                     isUpdated = true;
                 }
 
@@ -1073,7 +1080,7 @@
         } else if (!dataInsane) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
             bindTooltip(container.querySelector('.insane-btn-group'), `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${dbName} sem data</div><div class="insane-tooltip-row"><span class="insane-tooltip-label">Info:</span> <span class="insane-tooltip-value">${t.mirrorNoDateTip}</span></div>${cacheInfoHtml}`);
-        } else if (dataSteam === STEAM_NO_DATE || dataInsane >= dataSteam) {
+        } else if (utils.isUpToDate(dataInsane, dataSteam)) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${modData.link}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
             bindTooltip(container.firstElementChild, `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${steamRowHtml}${mirrorRowHtml}${cacheInfoHtml}`);
         } else {
