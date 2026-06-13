@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -13,8 +13,8 @@
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @connect      catalogue.smods.ru
-// @updateURL    https://github.com/Martin01683/Scripts-do-ViolentMonkey/raw/refs/heads/main/Steam%20Workshop%20Direct%20Download.user.js
-// @downloadURL  https://github.com/Martin01683/Scripts-do-ViolentMonkey/raw/refs/heads/main/Steam%20Workshop%20Direct%20Download.user.js
+// @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Steam%20Workshop%20Direct%20Download%20(Modular%20Core).user.js
+// @downloadURL  https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Steam%20Workshop%20Direct%20Download%20(Modular%20Core).user.js
 // ==/UserScript==
 
 (function() {
@@ -47,6 +47,7 @@
         },
         parseInsaneDate: function(dateStr) {
             if (!dateStr || dateStr.startsWith('0000-00-00')) return null;
+            // InsaneDB salva as datas em Horário Central Europeu (CET / UTC+1)
             const d = new Date(dateStr.replace(' ', 'T') + '+01:00');
             return isNaN(d.getTime()) ? null : d;
         },
@@ -63,7 +64,8 @@
                 const currentYear = new Date().getFullYear();
                 normalized = normalized.replace(/\b(\d{1,2}:\d{2})\b/, `${currentYear} $1`);
             }
-            const d = new Date(normalized + " UTC");
+            // Skymods (smods.ru) processa e salva os timestamps da Steam em UTC-3
+            const d = new Date(normalized + " -03:00");
             return isNaN(d.getTime()) ? null : d;
         },
         getIdFromName: function(name) {
@@ -79,7 +81,7 @@
             databases: [
                 {
                     id: "github_main",
-                    name: "GitHub Mirror",
+                    name: "GitHub",
                     type: "full_db",
                     url: "https://raw.githubusercontent.com/AORUS834/947e26abefdb9eb0a9cd292d2ee691d9/refs/heads/main/files.json",
                     cacheTime: 10 * 60 * 1000,
@@ -100,7 +102,7 @@
                     name: "Insane DB",
                     type: "full_db",
                     url: "https://insane.x10.mx/paralives.php",
-                    cacheTime: 10 * 60 * 1000,
+                    cacheTime: 60 * 60 * 1000,
                     parser: (responseText) => {
                         const jsonString = utils.extractJsonArray(responseText, 'allMods');
                         if (!jsonString) throw new Error("Format error");
@@ -120,24 +122,35 @@
                     name: "Skymods",
                     type: "per_mod",
                     url: (modId) => `https://catalogue.smods.ru/?s=${modId}&app=1118520`,
-                    cacheTime: 10 * 60 * 1000,
-                    parser: (responseText) => {
+                    cacheTime: 60 * 60 * 1000,
+                    parser: (responseText, modId) => {
                         const parser = new DOMParser();
                         const doc = parser.parseFromString(responseText, "text/html");
                         
-                        const postList = doc.querySelector('.post-list');
-                        if (!postList) return null;
-
-                        const dateStrEl = postList.querySelector('.skymods-item-date');
-                        if (!dateStrEl) return null;
+                        let bestMatch = null;
+                        const posts = doc.querySelectorAll('.post-list article');
                         
-                        const dateObj = utils.parseSmodsDate(dateStrEl.textContent);
-                        
-                        // Busca especificamente pelo botão de download ignorando o botão "Read More" do próprio site
-                        const linkEl = Array.from(postList.querySelectorAll('.skymods-excerpt-btn')).find(a => !a.href.includes('/archives/'));
-                        if (!linkEl) return null;
-
-                        return { link: linkEl.href, date: dateObj };
+                        for (const post of posts) {
+                            const dateStrEl = post.querySelector('.skymods-item-date');
+                            // Busca o botão de download que joga para fora do site
+                            const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
+                            
+                            if (dateStrEl && linkEl) {
+                                const modData = { 
+                                    link: linkEl.href, 
+                                    date: utils.parseSmodsDate(dateStrEl.textContent) 
+                                };
+                                
+                                // Verifica se esse resultado da busca bate exatamente com a página original da Steam do nosso mod
+                                const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
+                                if (steamLink && steamLink.href.includes(modId)) {
+                                    return modData; // Correspondência exata encontrada
+                                }
+                                
+                                if (!bestMatch) bestMatch = modData; // Salva o primeiro como fallback se nenhum link bater
+                            }
+                        }
+                        return bestMatch;
                     }
                 }
             ]
@@ -148,10 +161,10 @@
             databases: [
                 {
                     id: "insane_php_eu5",
-                    name: "Insane DB (EU5)",
+                    name: "Insane DB",
                     type: "full_db",
                     url: "https://insane.x10.mx/eu5.php",
-                    cacheTime: 10 * 60 * 1000,
+                    cacheTime: 60 * 60 * 1000,
                     parser: (responseText) => {
                         const jsonString = utils.extractJsonArray(responseText, 'allMods');
                         if (!jsonString) throw new Error("Format error");
@@ -853,7 +866,7 @@
             return requestPromise;
 
         } else {
-            // Full DB
+            // Banco Full (Puxa tudo e guarda)
             const cacheKey = `${CACHE_PREFIX}DB_${dbConfig.id}`;
             const now = Date.now();
 
@@ -935,7 +948,7 @@
                 }
             }
             
-            // Registra que esse banco foi consultado para aparecer no tooltip
+            // Registra que esse banco foi consultado para aparecer no tooltip dinâmico
             if (dbCacheObj) {
                 consultedDBs.push({
                     id: dbConfig.id,
@@ -960,14 +973,12 @@
                 if (dataSteam === STEAM_NO_DATE || dataSteam === STEAM_FETCH_ERROR) {
                     isUpdated = true;
                 } else if (!dataInsane) {
-                    // Sem data no banco, mas a Steam tem. Tratamos como desatualizado temporariamente para checar outros DBs
                     isUpdated = false; 
                 } else if (dataInsane >= dataSteam) {
                     isUpdated = true;
                 }
 
                 if (isUpdated) {
-                    // Achou a versão atualizada! Parar de consultar os próximos DBs e retornar imediatamente.
                     return { 
                         dbId: dbConfig.id,
                         dbName: dbConfig.name, 
@@ -977,7 +988,6 @@
                         consultedDBs: consultedDBs
                     };
                 } else {
-                    // Está desatualizado. Salva como fallback (caso seja o melhor até agora) e tenta buscar no próximo banco
                     if (!bestOutdated || (dataInsane && bestOutdated.modData.date && dataInsane > bestOutdated.modData.date)) {
                         bestOutdated = {
                             dbId: dbConfig.id,
@@ -991,13 +1001,11 @@
             }
         }
 
-        // Se o loop finalizou e não encontramos um mod atualizado, retornamos o fallback (o mod desatualizado)
         if (bestOutdated) {
             bestOutdated.consultedDBs = consultedDBs;
             return bestOutdated;
         }
 
-        // O mod não foi encontrado em nenhum dos bancos consultados
         return { consultedDBs: consultedDBs, notFound: true };
     }
 
@@ -1009,13 +1017,9 @@
         const cClass = isCard ? 'insane-custom-btn-compact' : '';
         container.innerHTML = `<a class="insane-custom-btn ${cClass} insane-state-loading">${t.checkingVersion}</a>`;
 
-        // 1. Obtém a data da Steam primeiro
         const dataSteam = await getSteamDateAsync(modId);
-
-        // 2. Busca sequencialmente nos DBs para achar o mod e já avalia as datas dinamicamente
         const dbResult = await getBestModFromDatabases(modId, dataSteam);
 
-        // Prepara os dados de exibição do status do cache (Tooltip dinâmico de DBs)
         const steamCacheExp = localSteamCache[modId] ? localSteamCache[modId].exp : 0;
         const creationTimeSteam = steamCacheExp ? (steamCacheExp - CACHE_TIME_STEAM_MS) : Date.now();
 
@@ -1054,7 +1058,6 @@
         const { dbId, dbName, modData, exp, creation } = dbResult;
         const dataInsane = modData.date;
 
-        // Associa todos os IDs consultados ao container, assim qualquer DB expirado ativará o re-render
         delete container.dataset.activeDbId;
         container.dataset.activeDbIds = JSON.stringify(consultedDBs.map(db => db.id));
 
