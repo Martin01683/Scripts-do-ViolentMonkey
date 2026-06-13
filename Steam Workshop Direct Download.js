@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -13,8 +13,8 @@
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
 // @connect      catalogue.smods.ru
-// @updateURL    https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Steam%20Workshop%20Direct%20Download%20(Modular%20Core).user.js
-// @downloadURL  https://raw.githubusercontent.com/Martin01683/Scripts-do-ViolentMonkey/main/Steam%20Workshop%20Direct%20Download%20(Modular%20Core).user.js
+// @updateURL    https://github.com/Martin01683/Scripts-do-ViolentMonkey/raw/refs/heads/main/Steam%20Workshop%20Direct%20Download.js
+// @downloadURL  https://github.com/Martin01683/Scripts-do-ViolentMonkey/raw/refs/heads/main/Steam%20Workshop%20Direct%20Download.js
 // ==/UserScript==
 
 (function() {
