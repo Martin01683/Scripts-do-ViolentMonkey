@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -168,7 +168,7 @@
             databases: [
                 {
                     id: "insane_php_eu5",
-                    name: "Insane DB (EU5)",
+                    name: "Insane DB",
                     type: "full_db",
                     url: "https://insane.x10.mx/eu5.php",
                     cacheTime: 60 * 60 * 1000,
@@ -184,6 +184,42 @@
                             }
                         });
                         return result;
+                    }
+                },
+				{
+                    id: "smods_ru_eu5",
+                    name: "Skymods",
+                    type: "per_mod",
+                    url: (modId) => `https://catalogue.smods.ru/?s=${modId}&app=3450310`,
+                    cacheTime: 60 * 60 * 1000,
+                    parser: (responseText, modId) => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(responseText, "text/html");
+                        
+                        let bestMatch = null;
+                        const posts = doc.querySelectorAll('.post-list article');
+                        
+                        for (const post of posts) {
+                            const dateStrEl = post.querySelector('.skymods-item-date');
+                            // Busca o botão de download que joga para fora do site
+                            const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
+                            
+                            if (dateStrEl && linkEl) {
+                                const modData = { 
+                                    link: linkEl.href, 
+                                    date: utils.parseSmodsDate(dateStrEl.textContent) 
+                                };
+                                
+                                // Verifica se esse resultado da busca bate exatamente com a página original da Steam do nosso mod
+                                const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
+                                if (steamLink && steamLink.href.includes(modId)) {
+                                    return modData; // Correspondência exata encontrada
+                                }
+                                
+                                if (!bestMatch) bestMatch = modData; // Salva o primeiro como fallback se nenhum link bater
+                            }
+                        }
+                        return bestMatch;
                     }
                 }
             ]
