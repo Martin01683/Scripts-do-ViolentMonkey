@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      0.8
+// @version      0.9
 // @description  Link direto modular com suporte a múltiplos jogos, i18n, fallback de banco de dados.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -62,13 +62,13 @@
         parseInsaneDate: function(dateStr) {
             if (!dateStr || dateStr.startsWith('0000-00-00')) return null;
             const d = new Date(dateStr.replace(' ', 'T') + '+01:00');
-            return isNaN(d.getTime()) ? null : d;
+            return isNaN(d.getTime()) ? null : { date: d, exact: /\d{2}:\d{2}/.test(dateStr) };
         },
         parseGithubDate: function(dateStr) {
             if (!dateStr) return null;
             const match = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
             if (!match) return null;
-            return new Date(Date.UTC(match[1], match[2] - 1, match[3], match[4] - 1, match[5], match[6] || 0));
+            return { date: new Date(Date.UTC(match[1], match[2] - 1, match[3], match[4] - 1, match[5], match[6] || 0)), exact: true };
         },
         parseSmodsDate: function(dateStr) {
             if (!dateStr) return null;
@@ -90,14 +90,17 @@
                     if (parsedDate.getTime() > Date.now()) {
                         parsedDate.setUTCFullYear(currentYear - 1);
                     }
-                    return parsedDate;
+                    return { date: parsedDate, exact: true };
                 }
             }
 
             const d1 = new Date(dateStr);
             if (!isNaN(d1.getTime())) {
-                if (!/\d{2}:\d{2}/.test(dateStr)) d1.setHours(23, 59, 59, 999);
-                return d1;
+                if (!/\d{2}:\d{2}/.test(dateStr)) {
+                    d1.setHours(23, 59, 59, 999);
+                    return { date: d1, exact: false };
+                }
+                return { date: d1, exact: true };
             }
             return null;
         },
@@ -134,21 +137,52 @@
                 for (const post of posts) {
                     const possibleDates = [];
 
+                    // Captura as datas de fallback
                     post.querySelectorAll('.updated, .published, .skymods-item-date').forEach(el => {
                         const textOrAttr = el.getAttribute('datetime') || el.textContent;
-                        const d = utils.parseSmodsDate(textOrAttr);
-                        if (d && !isNaN(d.getTime())) possibleDates.push(d.getTime());
+                        const res = utils.parseSmodsDate(textOrAttr);
+                        if (res && res.date && !isNaN(res.date.getTime())) {
+                            possibleDates.push({ date: res.date, time: res.date.getTime(), exact: res.exact });
+                        }
                     });
 
-                    let finalDate = null;
+                    let fallbackDateObj = null;
                     if (possibleDates.length > 0) {
-                        finalDate = new Date(Math.max(...possibleDates));
+                        const maxObj = possibleDates.reduce((prev, curr) => (prev.time > curr.time) ? prev : curr);
+                        fallbackDateObj = { date: new Date(maxObj.time), exact: maxObj.exact };
+                    }
+
+                    // Tenta capturar a "Last revision" primeiro (Prioridade)
+                    let revDateObj = null;
+                    const allEls = post.querySelectorAll('*');
+                    for (const el of allEls) {
+                        if (el.childNodes.length > 0) {
+                            for (const node of el.childNodes) {
+                                if (node.nodeType === 3 && node.nodeValue.includes('Last revision:')) {
+                                    const revMatch = node.nodeValue.match(/Last revision:\s*([A-Za-z0-9\s:,]+)/i);
+                                    if (revMatch) {
+                                        const res = utils.parseSmodsDate(revMatch[1]);
+                                        if (res && res.date && !isNaN(res.date.getTime())) revDateObj = { date: res.date, exact: res.exact };
+                                    }
+                                }
+                            }
+                        }
+                        if (revDateObj) break;
                     }
 
                     const linkEl = Array.from(post.querySelectorAll('.skymods-excerpt-btn')).find(a => a.href && !a.href.includes('/archives/'));
 
-                    if (finalDate && linkEl) {
-                        const modData = { link: linkEl.href, date: finalDate };
+                    if ((revDateObj || fallbackDateObj) && linkEl) {
+                        const primaryDate = revDateObj ? revDateObj.date : fallbackDateObj.date;
+                        const primaryExact = revDateObj ? revDateObj.exact : fallbackDateObj.exact;
+
+                        const modData = {
+                            link: linkEl.href,
+                            date: primaryDate,
+                            exactTime: primaryExact,
+                            fallbackDate: fallbackDateObj ? fallbackDateObj.date : null,
+                            fallbackExact: fallbackDateObj ? fallbackDateObj.exact : true
+                        };
 
                         const steamLink = post.querySelector('a[href*="steamcommunity.com/"][href*="?id="]');
                         if (steamLink && steamLink.href.includes(modId)) return modData;
@@ -173,7 +207,10 @@
                 parsedData.forEach(mod => {
                     if (mod.name && (mod.link || mod.url)) {
                         const idSteam = mod.name.match(/^(\d+)/);
-                        if (idSteam) result[idSteam[1]] = { link: mod.link || mod.url, date: utils.parseInsaneDate(mod.uploaded) };
+                        if (idSteam) {
+                            const parsed = utils.parseInsaneDate(mod.uploaded);
+                            result[idSteam[1]] = { link: mod.link || mod.url, date: parsed ? parsed.date : null, exactTime: parsed ? parsed.exact : true };
+                        }
                     }
                 });
                 return result;
@@ -193,7 +230,10 @@
                 files.forEach(file => {
                     const idSteam = utils.getIdFromName(file?.name);
                     const link = file?.link || file?.url;
-                    if (idSteam && link) result[idSteam] = { link: link, date: utils.parseGithubDate(file.uploaded) };
+                    if (idSteam && link) {
+                        const parsed = utils.parseGithubDate(file.uploaded);
+                        result[idSteam] = { link: link, date: parsed ? parsed.date : null, exactTime: parsed ? parsed.exact : true };
+                    }
                 });
                 return result;
             }
@@ -252,20 +292,20 @@
     // 2. TRADUÇÕES (I18N)
     // ========================================================================
     const translations = {
-        en: { loading: '⏳ Loading...', checkingVersion: '⏳ Checking Version...', dbError: '⚠️ Mirror DB Error', requestMod: '➕ Request Mod', modNotListed: 'Mod not listed. Click to request.', download: '✅ Download', downloadWarning: '⚠️ Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update on Forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'just now', minAgo: 'min ago', steamError: '⚠️ Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: '⚠️ Unverified Mirror', mirrorNoDateTip: 'Could not verify mirror version date.', updateCache: '🔄 Update Cache', cacheCooldown: '⏳ Update cache ({s}s)', idlePaused: '⏸️ Paused (Idle)', idleActive: '🟢 Active' },
-        pt: { loading: '⏳ Buscando...', checkingVersion: '⏳ Verificando versão...', dbError: '⚠️ Erro na Base', requestMod: '➕ Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: '✅ Baixar', downloadWarning: '⚠️ Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização no Fórum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', cacheDB: 'Banco de Dados:', justNow: 'agora', minAgo: 'min atrás', steamError: '⚠️ Sem Verificar', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: '⚠️ Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', updateCache: '🔄 Atualizar Cache', cacheCooldown: '⏳ Atualizar cache ({s}s)', idlePaused: '⏸️ Pausado (Inativo)', idleActive: '🟢 Ativo' },
-        es: { loading: '⏳ Buscando...', checkingVersion: '⏳ Comprobando versión...', dbError: '⚠️ Error de base', requestMod: '➕ Pedir mod', modNotListed: 'Mod no listado. Haz clic para pedirlo.', download: '✅ Descargar', downloadWarning: '⚠️ Descargar', modUpdated: 'MOD ACTUALIZADO', modOutdated: 'MOD DESACTUALIZADO', requestUpdate: 'Pedir actualización en el foro', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Estado del caché:', cacheSteam: 'Steam:', cacheDB: 'Base de datos:', justNow: 'ahora', minAgo: 'min atrás', steamError: '⚠️ No verificado', steamErrorTip: 'Fallo en la API de Steam. Versión no verificada.', mirrorNoDate: '⚠️ Mirror sin fecha', mirrorNoDateTip: 'No se pudo verificar la versión del mirror.', updateCache: '🔄 Actualizar caché', cacheCooldown: '⏳ Actualizar caché ({s}s)', idlePaused: '⏸️ Pausado (Inactivo)', idleActive: '🟢 Activo' },
-        fr: { loading: '⏳ Recherche...', checkingVersion: '⏳ Vérification de la version...', dbError: '⚠️ Erreur de base', requestMod: '➕ Demander le mod', modNotListed: 'Mod non listé. Cliquez pour le demander.', download: '✅ Télécharger', downloadWarning: '⚠️ Télécharger', modUpdated: 'MOD À JOUR', modOutdated: 'MOD OBSOLÈTE', requestUpdate: 'Demander une mise à jour sur le forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'État du cache:', cacheSteam: 'Steam:', cacheDB: 'Base de données:', justNow: 'à l\'instant', minAgo: 'min', steamError: '⚠️ Non vérifié', steamErrorTip: 'Erreur de l\'API Steam. Version non vérifiée.', mirrorNoDate: '⚠️ Mirror sans date', mirrorNoDateTip: 'Impossible de vérifier la version du mirror.', updateCache: '🔄 Mettre à jour le cache', cacheCooldown: '⏳ Mettre à jour ({s}s)', idlePaused: '⏸️ En pause (Inactif)', idleActive: '🟢 Actif' },
-        de: { loading: '⏳ Suche...', checkingVersion: '⏳ Version wird geprüft...', dbError: '⚠️ Datenbankfehler', requestMod: '➕ Mod anfragen', modNotListed: 'Mod nicht gelistet. Zum Anfragen klicken.', download: '✅ Herunterladen', downloadWarning: '⚠️ Herunterladen', modUpdated: 'MOD AKTUELL', modOutdated: 'MOD VERALTET', requestUpdate: 'Update im Forum anfragen', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache-Status:', cacheSteam: 'Steam:', cacheDB: 'Datenbank:', justNow: 'gerade eben', minAgo: 'Min. her', steamError: '⚠️ Nicht verifiziert', steamErrorTip: 'Steam API nicht erreichbar. Version nicht verifiziert.', mirrorNoDate: '⚠️ Mirror ohne Datum', mirrorNoDateTip: 'Mirror-Version konnte nicht verifiziert werden.', updateCache: '🔄 Cache aktualisieren', cacheCooldown: '⏳ Cache aktualisieren ({s}s)', idlePaused: '⏸️ Pausiert (Inaktiv)', idleActive: '🟢 Aktiv' },
-        it: { loading: '⏳ Ricerca...', checkingVersion: '⏳ Controllo versione...', dbError: '⚠️ Errore database', requestMod: '➕ Richiedi mod', modNotListed: 'Mod non presente. Clicca per richiederla.', download: '✅ Scarica', downloadWarning: '⚠️ Scarica', modUpdated: 'MOD AGGIORNATA', modOutdated: 'MOD NON AGGIORNATA', requestUpdate: 'Richiedi aggiornamento sul forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Stato cache:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'adesso', minAgo: 'min fa', steamError: '⚠️ Non verificato', steamErrorTip: 'API Steam non raggiungibile. Versione non verificata.', mirrorNoDate: '⚠️ Mirror senza data', mirrorNoDateTip: 'Impossibile verificare la versione del mirror.', updateCache: '🔄 Aggiorna cache', cacheCooldown: '⏳ Aggiorna cache ({s}s)', idlePaused: '⏸️ In pausa (Inattivo)', idleActive: '🟢 Attivo' },
-        nl: { loading: '⏳ Zoeken...', checkingVersion: '⏳ Versie controleren...', dbError: '⚠️ Databasefout', requestMod: '➕ Mod aanvragen', modNotListed: 'Mod staat niet in de lijst. Klik om aan te vragen.', download: '✅ Downloaden', downloadWarning: '⚠️ Downloaden', modUpdated: 'MOD IS UP-TO-DATE', modOutdated: 'MOD IS VEROUDERD', requestUpdate: 'Update aanvragen op het forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache-status:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'zojuist', minAgo: 'min geleden', steamError: '⚠️ Ongecontroleerd', steamErrorTip: 'Steam API onbereikbaar. Versie niet gecontroleerd.', mirrorNoDate: '⚠️ Mirror zonder datum', mirrorNoDateTip: 'Kon de mirrorversie niet verifiëren.', updateCache: '🔄 Cache bijwerken', cacheCooldown: '⏳ Cache bijwerken ({s}s)', idlePaused: '⏸️ Gepauzeerd (Inactief)', idleActive: '🟢 Actief' },
-        pl: { loading: '⏳ Szukanie...', checkingVersion: '⏳ Sprawdzanie wersji...', dbError: '⚠️ Błąd bazy', requestMod: '➕ Poproś o mod', modNotListed: 'Mod nie jest na liście. Kliknij, aby poprosić.', download: '✅ Pobierz', downloadWarning: '⚠️ Pobierz', modUpdated: 'MOD AKTUALNY', modOutdated: 'MOD NIEAKTUALNY', requestUpdate: 'Poproś o aktualizację na forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Stan pamięci podręcznej:', cacheSteam: 'Steam:', cacheDB: 'Baza danych:', justNow: 'właśnie teraz', minAgo: 'min temu', steamError: '⚠️ Niezweryfikowane', steamErrorTip: 'API Steam niedostępne. Wersja niezweryfikowana.', mirrorNoDate: '⚠️ Mirror bez daty', mirrorNoDateTip: 'Nie można zweryfikować wersji mirrora.', updateCache: '🔄 Zaktualizuj pamięć', cacheCooldown: '⏳ Zaktualizuj pamięć ({s}s)', idlePaused: '⏸️ Wstrzymano (Bezczynny)', idleActive: '🟢 Aktywny' },
-        ru: { loading: '⏳ Поиск...', checkingVersion: '⏳ Проверка версии...', dbError: '⚠️ Ошибка базы', requestMod: '➕ Запросить мод', modNotListed: 'Мода нет в списке. Нажмите, чтобы запросить.', download: '✅ Скачать', downloadWarning: '⚠️ Скачать', modUpdated: 'МОД АКТУАЛЕН', modOutdated: 'МОД УСТАРЕЛ', requestUpdate: 'Запросить обновление на форуме', labelSteam: 'Steam:', labelInsane: 'Зеркало:', labelCache: 'Статус кэша:', cacheSteam: 'Steam:', cacheDB: 'База данных:', justNow: 'только что', minAgo: 'мин назад', steamError: '⚠️ Не проверено', steamErrorTip: 'API Steam недоступен. Версия не проверена.', mirrorNoDate: '⚠️ Зеркало без даты', mirrorNoDateTip: 'Не удалось проверить версию зеркала.', updateCache: '🔄 Обновить кэш', cacheCooldown: '⏳ Обновить кэш ({s}s)', idlePaused: '⏸️ Пауза (Бездействие)', idleActive: '🟢 Активно' },
-        tr: { loading: '⏳ Aranıyor...', checkingVersion: '⏳ Sürüm kontrol ediliyor...', dbError: '⚠️ Veritabanı hatası', requestMod: '➕ Mod iste', modNotListed: 'Mod listede yok. İstemek için tıkla.', download: '✅ İndir', downloadWarning: '⚠️ İndir', modUpdated: 'MOD GÜNCEL', modOutdated: 'MOD ESKİ', requestUpdate: 'Forumda güncelleme iste', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Önbellek Durumu:', cacheSteam: 'Steam:', cacheDB: 'Veritabanı:', justNow: 'şimdi', minAgo: 'dk önce', steamError: '⚠️ Doğrulanmadı', steamErrorTip: 'Steam API\'sine ulaşılamıyor. Sürüm doğrulanmadı.', mirrorNoDate: '⚠️ Tarihsiz Mirror', mirrorNoDateTip: 'Mirror sürümü doğrulanamadı.', updateCache: '🔄 Önbelleği Güncelle', cacheCooldown: '⏳ Önbelleği güncelle ({s}s)', idlePaused: '⏸️ Duraklatıldı (Boşta)', idleActive: '🟢 Aktif' },
-        zh: { loading: '⏳ 正在查找...', checkingVersion: '⏳ 正在检查版本...', dbError: '⚠️ 数据库错误', requestMod: '➕ 请求 Mod', modNotListed: 'Mod 未收录。点击请求。', download: '✅ 下载', downloadWarning: '⚠️ 下载', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已过期', requestUpdate: '在论坛请求更新', labelSteam: 'Steam:', labelInsane: '镜像:', labelCache: '缓存状态:', cacheSteam: 'Steam:', cacheDB: '数据库:', justNow: '刚刚', minAgo: '分钟前', steamError: '⚠️ 未验证', steamErrorTip: 'Steam API 无法访问。版本未验证。', mirrorNoDate: '⚠️ 镜像无日期', mirrorNoDateTip: '无法验证镜像版本。', updateCache: '🔄 更新缓存', cacheCooldown: '⏳ 更新缓存 ({s}s)', idlePaused: '⏸️ 已暂停（空闲）', idleActive: '🟢 活跃' },
-        zh_tw: { loading: '⏳ 正在尋找...', checkingVersion: '⏳ 正在檢查版本...', dbError: '⚠️ 資料庫錯誤', requestMod: '➕ 請求 Mod', modNotListed: 'Mod 未收錄。點擊請求。', download: '✅ 下載', downloadWarning: '⚠️ 下載', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已過期', requestUpdate: '在論壇請求更新', labelSteam: 'Steam:', labelInsane: '鏡像:', labelCache: '快取狀態:', cacheSteam: 'Steam:', cacheDB: '資料庫:', justNow: '剛剛', minAgo: '分鐘前', steamError: '⚠️ 未驗證', steamErrorTip: 'Steam API 無法訪問。版本未驗證。', mirrorNoDate: '⚠️ 鏡像無日期', mirrorNoDateTip: '無法驗證鏡像版本。', updateCache: '🔄 更新快取', cacheCooldown: '⏳ 更新快取 ({s}s)', idlePaused: '⏸️ 已暫停（閒置）', idleActive: '🟢 活躍' },
-        ja: { loading: '⏳ 検索中...', checkingVersion: '⏳ バージョン確認中...', dbError: '⚠️ DBエラー', requestMod: '➕ Modをリクエスト', modNotListed: 'Modが未登録です。クリックしてリクエスト。', download: '✅ ダウンロード', downloadWarning: '⚠️ ダウンロード', modUpdated: 'MODは最新です', modOutdated: 'MODは古い可能性があります', requestUpdate: 'フォーラムで更新をリクエスト', labelSteam: 'Steam:', labelInsane: 'ミラー:', labelCache: 'キャッシュ状態:', cacheSteam: 'Steam:', cacheDB: 'データベース:', justNow: 'たった今', minAgo: '分前', steamError: '⚠️ 未検証', steamErrorTip: 'Steam APIにアクセスできません。バージョン未検証。', mirrorNoDate: '⚠️ 日付のないミラー', mirrorNoDateTip: 'ミラーのバージョンを確認できませんでした。', updateCache: '🔄 キャッシュを更新', cacheCooldown: '⏳ キャッシュ更新 ({s}s)', idlePaused: '⏸️ 一時停止（アイドル）', idleActive: '🟢 アクティブ' },
-        ko: { loading: '⏳ 검색 중...', checkingVersion: '⏳ 버전 확인 중...', dbError: '⚠️ DB 오류', requestMod: '➕ 모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '✅ 다운로드', downloadWarning: '⚠️ 다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '포럼에서 업데이트 요청', labelSteam: 'Steam:', labelInsane: '미러:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', cacheDB: '데이터베이스:', justNow: '방금', minAgo: '분 전', steamError: '⚠️ 확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '⚠️ 날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', updateCache: '🔄 캐시 업데이트', cacheCooldown: '⏳ 캐시 업데이트 ({s}s)', idlePaused: '⏸️ 일시 정지 (유휴)', idleActive: '🟢 활성' }
+        en: { loading: '⏳ Loading...', checkingVersion: '⏳ Checking Version...', dbError: '⚠️ Mirror DB Error', requestMod: '➕ Request Mod', modNotListed: 'Mod not listed. Click to request.', download: '✅ Download', downloadWarning: '⚠️ Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update on Forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'just now', minAgo: 'min ago', steamError: '⚠️ Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: '⚠️ Unverified Mirror', mirrorNoDateTip: 'Could not verify mirror version date.', updateCache: '🔄 Update Cache', cacheCooldown: '⏳ Update cache ({s}s)', idlePaused: '⏸️ Paused (Idle)', idleActive: '🟢 Active', exactTimeWarn: '⚠️ The database provided only the date. Cannot be 100% sure if updated.' },
+        pt: { loading: '⏳ Buscando...', checkingVersion: '⏳ Verificando versão...', dbError: '⚠️ Erro na Base', requestMod: '➕ Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: '✅ Baixar', downloadWarning: '⚠️ Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização no Fórum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', cacheDB: 'Banco de Dados:', justNow: 'agora', minAgo: 'min atrás', steamError: '⚠️ Sem Verificar', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: '⚠️ Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', updateCache: '🔄 Atualizar Cache', cacheCooldown: '⏳ Atualizar cache ({s}s)', idlePaused: '⏸️ Pausado (Inativo)', idleActive: '🟢 Ativo', exactTimeWarn: '⚠️ O banco de dados forneceu apenas a data (sem hora). Não há como ter certeza absoluta se está realmente atualizado.' },
+        es: { loading: '⏳ Buscando...', checkingVersion: '⏳ Comprobando versión...', dbError: '⚠️ Error de base', requestMod: '➕ Pedir mod', modNotListed: 'Mod no listado. Haz clic para pedirlo.', download: '✅ Descargar', downloadWarning: '⚠️ Descargar', modUpdated: 'MOD ACTUALIZADO', modOutdated: 'MOD DESACTUALIZADO', requestUpdate: 'Pedir actualización en el foro', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Estado del caché:', cacheSteam: 'Steam:', cacheDB: 'Base de datos:', justNow: 'ahora', minAgo: 'min atrás', steamError: '⚠️ No verificado', steamErrorTip: 'Fallo en la API de Steam. Versión no verificada.', mirrorNoDate: '⚠️ Mirror sin fecha', mirrorNoDateTip: 'No se pudo verificar la versión del mirror.', updateCache: '🔄 Actualizar caché', cacheCooldown: '⏳ Actualizar caché ({s}s)', idlePaused: '⏸️ Pausado (Inactivo)', idleActive: '🟢 Activo', exactTimeWarn: '⚠️ La base de datos solo proporcionó la fecha. No se puede estar 100% seguro de si está actualizado.' },
+        fr: { loading: '⏳ Recherche...', checkingVersion: '⏳ Vérification de la version...', dbError: '⚠️ Erreur de base', requestMod: '➕ Demander le mod', modNotListed: 'Mod non listé. Cliquez pour le demander.', download: '✅ Télécharger', downloadWarning: '⚠️ Télécharger', modUpdated: 'MOD À JOUR', modOutdated: 'MOD OBSOLÈTE', requestUpdate: 'Demander une mise à jour sur le forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'État du cache:', cacheSteam: 'Steam:', cacheDB: 'Base de données:', justNow: 'à l\'instant', minAgo: 'min', steamError: '⚠️ Non vérifié', steamErrorTip: 'Erreur de l\'API Steam. Version non vérifiée.', mirrorNoDate: '⚠️ Mirror sans date', mirrorNoDateTip: 'Impossible de vérifier la version du mirror.', updateCache: '🔄 Mettre à jour le cache', cacheCooldown: '⏳ Mettre à jour ({s}s)', idlePaused: '⏸️ En pause (Inactif)', idleActive: '🟢 Actif', exactTimeWarn: '⚠️ La base de données n\'a fourni que la date. Impossible d\'être sûr à 100 % qu\'il est à jour.' },
+        de: { loading: '⏳ Suche...', checkingVersion: '⏳ Version wird geprüft...', dbError: '⚠️ Datenbankfehler', requestMod: '➕ Mod anfragen', modNotListed: 'Mod nicht gelistet. Zum Anfragen klicken.', download: '✅ Herunterladen', downloadWarning: '⚠️ Herunterladen', modUpdated: 'MOD AKTUELL', modOutdated: 'MOD VERALTET', requestUpdate: 'Update im Forum anfragen', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache-Status:', cacheSteam: 'Steam:', cacheDB: 'Datenbank:', justNow: 'gerade eben', minAgo: 'Min. her', steamError: '⚠️ Nicht verifiziert', steamErrorTip: 'Steam API nicht erreichbar. Version nicht verifiziert.', mirrorNoDate: '⚠️ Mirror ohne Datum', mirrorNoDateTip: 'Mirror-Version konnte nicht verifiziert werden.', updateCache: '🔄 Cache aktualisieren', cacheCooldown: '⏳ Cache aktualisieren ({s}s)', idlePaused: '⏸️ Pausiert (Inaktiv)', idleActive: '🟢 Aktiv', exactTimeWarn: '⚠️ Die Datenbank hat nur das Datum angegeben. Es kann nicht zu 100 % sicher sein, ob es aktualisiert ist.' },
+        it: { loading: '⏳ Ricerca...', checkingVersion: '⏳ Controllo versione...', dbError: '⚠️ Errore database', requestMod: '➕ Richiedi mod', modNotListed: 'Mod non presente. Clicca per richiederla.', download: '✅ Scarica', downloadWarning: '⚠️ Scarica', modUpdated: 'MOD AGGIORNATA', modOutdated: 'MOD NON AGGIORNATA', requestUpdate: 'Richiedi aggiornamento sul forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Stato cache:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'adesso', minAgo: 'min fa', steamError: '⚠️ Non verificato', steamErrorTip: 'API Steam non raggiungibile. Versione non verificata.', mirrorNoDate: '⚠️ Mirror senza data', mirrorNoDateTip: 'Impossibile verificare la versione del mirror.', updateCache: '🔄 Aggiorna cache', cacheCooldown: '⏳ Aggiorna cache ({s}s)', idlePaused: '⏸️ In pausa (Inattivo)', idleActive: '🟢 Attivo', exactTimeWarn: '⚠️ Il database ha fornito solo la data. Impossibile essere sicuri al 100% che sia aggiornato.' },
+        nl: { loading: '⏳ Zoeken...', checkingVersion: '⏳ Versie controleren...', dbError: '⚠️ Databasefout', requestMod: '➕ Mod aanvragen', modNotListed: 'Mod staat niet in de lijst. Klik om aan te vragen.', download: '✅ Downloaden', downloadWarning: '⚠️ Downloaden', modUpdated: 'MOD IS UP-TO-DATE', modOutdated: 'MOD IS VEROUDERD', requestUpdate: 'Update aanvragen op het forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Cache-status:', cacheSteam: 'Steam:', cacheDB: 'Database:', justNow: 'zojuist', minAgo: 'min geleden', steamError: '⚠️ Ongecontroleerd', steamErrorTip: 'Steam API onbereikbaar. Versie niet gecontroleerd.', mirrorNoDate: '⚠️ Mirror zonder datum', mirrorNoDateTip: 'Kon de mirrorversie niet verifiëren.', updateCache: '🔄 Cache bijwerken', cacheCooldown: '⏳ Cache bijwerken ({s}s)', idlePaused: '⏸️ Gepauzeerd (Inactief)', idleActive: '🟢 Actief', exactTimeWarn: '⚠️ De database gaf alleen de datum op. Kan niet 100% zeker zijn of het is bijgewerkt.' },
+        pl: { loading: '⏳ Szukanie...', checkingVersion: '⏳ Sprawdzanie wersji...', dbError: '⚠️ Błąd bazy', requestMod: '➕ Poproś o mod', modNotListed: 'Mod nie jest na liście. Kliknij, aby poprosić.', download: '✅ Pobierz', downloadWarning: '⚠️ Pobierz', modUpdated: 'MOD AKTUALNY', modOutdated: 'MOD NIEAKTUALNY', requestUpdate: 'Poproś o aktualizację na forum', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Stan pamięci podręcznej:', cacheSteam: 'Steam:', cacheDB: 'Baza danych:', justNow: 'właśnie teraz', minAgo: 'min temu', steamError: '⚠️ Niezweryfikowane', steamErrorTip: 'API Steam niedostępne. Wersja niezweryfikowana.', mirrorNoDate: '⚠️ Mirror bez daty', mirrorNoDateTip: 'Nie można zweryfikować wersji mirrora.', updateCache: '🔄 Zaktualizuj pamięć', cacheCooldown: '⏳ Zaktualizuj pamięć ({s}s)', idlePaused: '⏸️ Wstrzymano (Bezczynny)', idleActive: '🟢 Aktywny', exactTimeWarn: '⚠️ Baza danych podała tylko datę. Nie można mieć 100% pewności, czy jest zaktualizowana.' },
+        ru: { loading: '⏳ Поиск...', checkingVersion: '⏳ Проверка версии...', dbError: '⚠️ Ошибка базы', requestMod: '➕ Запросить мод', modNotListed: 'Мода нет в списке. Нажмите, чтобы запросить.', download: '✅ Скачать', downloadWarning: '⚠️ Скачать', modUpdated: 'МОД АКТУАЛЕН', modOutdated: 'МОД УСТАРЕЛ', requestUpdate: 'Запросить обновление на форуме', labelSteam: 'Steam:', labelInsane: 'Зеркало:', labelCache: 'Статус кэша:', cacheSteam: 'Steam:', cacheDB: 'База данных:', justNow: 'только что', minAgo: 'мин назад', steamError: '⚠️ Не проверено', steamErrorTip: 'API Steam недоступен. Версия не проверена.', mirrorNoDate: '⚠️ Зеркало без даты', mirrorNoDateTip: 'Не удалось проверить версию зеркала.', updateCache: '🔄 Обновить кэш', cacheCooldown: '⏳ Обновить кэш ({s}s)', idlePaused: '⏸️ Пауза (Бездействие)', idleActive: '🟢 Активно', exactTimeWarn: '⚠️ База данных предоставила только дату. Нельзя быть на 100% уверенным, что он обновлен.' },
+        tr: { loading: '⏳ Aranıyor...', checkingVersion: '⏳ Sürüm kontrol ediliyor...', dbError: '⚠️ Veritabanı hatası', requestMod: '➕ Mod iste', modNotListed: 'Mod listede yok. İstemek için tıkla.', download: '✅ İndir', downloadWarning: '⚠️ İndir', modUpdated: 'MOD GÜNCEL', modOutdated: 'MOD ESKİ', requestUpdate: 'Forumda güncelleme iste', labelSteam: 'Steam:', labelInsane: 'Mirror:', labelCache: 'Önbellek Durumu:', cacheSteam: 'Steam:', cacheDB: 'Veritabanı:', justNow: 'şimdi', minAgo: 'dk önce', steamError: '⚠️ Doğrulanmadı', steamErrorTip: 'Steam API\'sine ulaşılamıyor. Sürüm doğrulanmadı.', mirrorNoDate: '⚠️ Tarihsiz Mirror', mirrorNoDateTip: 'Mirror sürümü doğrulanamadı.', updateCache: '🔄 Önbelleği Güncelle', cacheCooldown: '⏳ Önbelleği güncelle ({s}s)', idlePaused: '⏸️ Duraklatıldı (Boşta)', idleActive: '🟢 Aktif', exactTimeWarn: '⚠️ Veritabanı yalnızca tarihi sağladı. Güncel olup olmadığından %100 emin olamayız.' },
+        zh: { loading: '⏳ 正在查找...', checkingVersion: '⏳ 正在检查版本...', dbError: '⚠️ 数据库错误', requestMod: '➕ 请求 Mod', modNotListed: 'Mod 未收录。点击请求。', download: '✅ 下载', downloadWarning: '⚠️ 下载', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已过期', requestUpdate: '在论坛请求更新', labelSteam: 'Steam:', labelInsane: '镜像:', labelCache: '缓存状态:', cacheSteam: 'Steam:', cacheDB: '数据库:', justNow: '刚刚', minAgo: '分钟前', steamError: '⚠️ 未验证', steamErrorTip: 'Steam API 无法访问。版本未验证。', mirrorNoDate: '⚠️ 镜像无日期', mirrorNoDateTip: '无法验证镜像版本。', updateCache: '🔄 更新缓存', cacheCooldown: '⏳ 更新缓存 ({s}s)', idlePaused: '⏸️ 已暂停（空闲）', idleActive: '🟢 活跃', exactTimeWarn: '⚠️ 数据库仅提供日期。无法 100% 确定是否已更新。' },
+        zh_tw: { loading: '⏳ 正在尋找...', checkingVersion: '⏳ 正在檢查版本...', dbError: '⚠️ 資料庫錯誤', requestMod: '➕ 請求 Mod', modNotListed: 'Mod 未收錄。點擊請求。', download: '✅ 下載', downloadWarning: '⚠️ 下載', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已過期', requestUpdate: '在論壇請求更新', labelSteam: 'Steam:', labelInsane: '鏡像:', labelCache: '快取狀態:', cacheSteam: 'Steam:', cacheDB: '資料庫:', justNow: '剛剛', minAgo: '分鐘前', steamError: '⚠️ 未驗證', steamErrorTip: 'Steam API 無法訪問。版本未驗證。', mirrorNoDate: '⚠️ 鏡像無日期', mirrorNoDateTip: '無法驗證鏡像版本。', updateCache: '🔄 更新快取', cacheCooldown: '⏳ 更新快取 ({s}s)', idlePaused: '⏸️ 已暫停（閒置）', idleActive: '🟢 活躍', exactTimeWarn: '⚠️ 資料庫僅提供日期。無法 100% 確定是否已更新。' },
+        ja: { loading: '⏳ 検索中...', checkingVersion: '⏳ バージョン確認中...', dbError: '⚠️ DBエラー', requestMod: '➕ Modをリクエスト', modNotListed: 'Modが未登録です。クリックしてリクエスト。', download: '✅ ダウンロード', downloadWarning: '⚠️ ダウンロード', modUpdated: 'MODは最新です', modOutdated: 'MODは古い可能性があります', requestUpdate: 'フォーラムで更新をリクエスト', labelSteam: 'Steam:', labelInsane: 'ミラー:', labelCache: 'キャッシュ状態:', cacheSteam: 'Steam:', cacheDB: 'データベース:', justNow: 'たった今', minAgo: '分前', steamError: '⚠️ 未検証', steamErrorTip: 'Steam APIにアクセスできません。バージョン未検証。', mirrorNoDate: '⚠️ 日付のないミラー', mirrorNoDateTip: 'ミラーのバージョンを確認できませんでした。', updateCache: '🔄 キャッシュを更新', cacheCooldown: '⏳ キャッシュ更新 ({s}s)', idlePaused: '⏸️ 一時停止（アイドル）', idleActive: '🟢 アクティブ', exactTimeWarn: '⚠️ データベースは日付のみを提供しました。更新されているか100％確信することはできません。' },
+        ko: { loading: '⏳ 검색 중...', checkingVersion: '⏳ 버전 확인 중...', dbError: '⚠️ DB 오류', requestMod: '➕ 모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '✅ 다운로드', downloadWarning: '⚠️ 다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '포럼에서 업데이트 요청', labelSteam: 'Steam:', labelInsane: '미러:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', cacheDB: '데이터베이스:', justNow: '방금', minAgo: '분 전', steamError: '⚠️ 확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '⚠️ 날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', updateCache: '🔄 캐시 업데이트', cacheCooldown: '⏳ 캐시 업데이트 ({s}s)', idlePaused: '⏸️ 일시 정지 (유휴)', idleActive: '🟢 활성', exactTimeWarn: '⚠️ 데이터베이스에서 날짜만 제공했습니다. 업데이트되었는지 100% 확신할 수 없습니다.' }
     };
 
     const languageAliases = {
@@ -605,7 +645,7 @@
                 wasIdleRecently = true;
                 setTimeout(() => { wasIdleRecently = false; refreshTooltipTimers(); }, 4000);
             }
-            lastActivityTime = now; // Atualização imediata do tempo
+            lastActivityTime = now;
 
             activityTimeout = setTimeout(() => {
                 activityTimeout = null;
@@ -870,6 +910,7 @@
                     const parsed = JSON.parse(stored);
                     if (parsed && parsed.exp > now) {
                         if (parsed.data && parsed.data.date) parsed.data.date = new Date(parsed.data.date);
+                        if (parsed.data && parsed.data.fallbackDate) parsed.data.fallbackDate = new Date(parsed.data.fallbackDate);
                         memoryDBCache[dbConfig.id][modId] = parsed;
                         return Promise.resolve(parsed);
                     }
@@ -929,6 +970,7 @@
                         if (parsed.data) {
                             for(let k in parsed.data) {
                                 if(parsed.data[k].date) parsed.data[k].date = new Date(parsed.data[k].date);
+                                if(parsed.data[k].fallbackDate) parsed.data[k].fallbackDate = new Date(parsed.data[k].fallbackDate);
                             }
                         }
                         memoryDBCache[dbConfig.id] = parsed;
@@ -1009,7 +1051,7 @@
             }
 
             if (modData) {
-                const dataInsane = modData.date;
+                let dataInsane = modData.date;
 
                 let isUpdated = false;
                 if (dataSteam === STEAM_NO_DATE || dataSteam === STEAM_FETCH_ERROR) {
@@ -1018,6 +1060,11 @@
                     isUpdated = false;
                 } else if (utils.isUpToDate(dataInsane, dataSteam)) {
                     isUpdated = true;
+                } else if (modData.fallbackDate && utils.isUpToDate(modData.fallbackDate, dataSteam)) {
+                    isUpdated = true;
+                    // Se o fallback salva e garante que está atualizado, utiliza ele para display
+                    modData.date = modData.fallbackDate;
+                    modData.exactTime = modData.fallbackExact;
                 }
 
                 if (isUpdated) {
@@ -1080,7 +1127,6 @@
             }
         }
 
-        // Bloco de informações de cache do Tooltip
         const cacheInfoHtml = `
             <div class="insane-tooltip-row" style="margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;">
                 <div style="color: #66c0f4; font-weight: bold; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
@@ -1092,7 +1138,6 @@
                 </div>
             </div>`;
 
-        // Verifica a configuração para renderizar ou omitir a parte do cache
         const finalCacheHtml = showCacheInfo ? cacheInfoHtml : '';
 
         if (!dbResult || dbResult.notFound) {
@@ -1100,7 +1145,6 @@
             const tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-error"><span>❌</span> ${t.modNotListed}</div>${finalCacheHtml}`;
             bindTooltip(container.firstElementChild, tooltipHtmlStr);
 
-            // Força a atualização do tooltip se o mouse estiver em cima durante o render
             if (container.matches(':hover')) {
                 tooltipGlobal.innerHTML = tooltipHtmlStr;
                 refreshTooltipTimers();
@@ -1112,13 +1156,20 @@
 
         const { dbId, dbName, modData, exp, creation } = dbResult;
         const dataInsane = modData.date;
+        const exactTime = modData.exactTime !== false;
 
         delete container.dataset.activeDbId;
         container.dataset.activeDbIds = JSON.stringify(consultedDBs.map(db => db.id));
 
-        const strInsane = dataInsane ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
-        const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR) ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
+        // Formatação dependente se temos a hora exata ou não
+        let strInsane = 'N/A';
+        if (dataInsane) {
+            strInsane = exactTime
+                ? dataInsane.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'})
+                : dataInsane.toLocaleString([], {dateStyle: 'short'});
+        }
 
+        const strSteam  = (dataSteam && dataSteam !== STEAM_NO_DATE && dataSteam !== STEAM_FETCH_ERROR) ? dataSteam.toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : 'N/A';
         const safeLink = (modData.link && (modData.link.startsWith('http://') || modData.link.startsWith('https://'))) ? modData.link : '#';
 
         const getDatesGridHtml = (showSteam, showMirror, infoLabel, infoValue) => {
@@ -1136,13 +1187,18 @@
             return gridHtml;
         };
 
+        let exactTimeWarningHtml = '';
+        if (!exactTime) {
+            exactTimeWarningHtml = `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal; line-height: 1.3;">${t.exactTimeWarn}</div>`;
+        }
+
         let targetEl;
         let tooltipHtmlStr;
 
         if (dataSteam === STEAM_FETCH_ERROR) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-error insane-btn-main">${t.steamError}</a><button class="insane-custom-btn ${cClass} insane-state-error insane-btn-arrow" data-show-forum="false">▼</button></div>`;
             targetEl = container.querySelector('.insane-btn-group');
-            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${getDatesGridHtml(false, true)}${finalCacheHtml}`;
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-error"><span>🔌</span> ${t.steamErrorTip}</div>${getDatesGridHtml(false, true)}${exactTimeWarningHtml}${finalCacheHtml}`;
             bindTooltip(targetEl, tooltipHtmlStr);
         } else if (!dataInsane) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="false">▼</button></div>`;
@@ -1152,16 +1208,15 @@
         } else if (utils.isUpToDate(dataInsane, dataSteam)) {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-success insane-btn-main">${t.download}</a><button class="insane-custom-btn ${cClass} insane-state-success insane-btn-arrow" data-show-forum="false">▼</button></div>`;
             targetEl = container.firstElementChild;
-            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${getDatesGridHtml(true, true)}${finalCacheHtml}`;
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-success"><span>✅</span> ${t.modUpdated}</div>${getDatesGridHtml(true, true)}${exactTimeWarningHtml}${finalCacheHtml}`;
             bindTooltip(targetEl, tooltipHtmlStr);
         } else {
             container.innerHTML = `<div class="insane-btn-group"><a href="${safeLink}" rel="noopener noreferrer" class="insane-custom-btn ${cClass} insane-state-warning insane-btn-main">${t.downloadWarning}</a><button class="insane-custom-btn ${cClass} insane-state-warning insane-btn-arrow" data-show-forum="true">▼</button></div>`;
             targetEl = container.querySelector('.insane-btn-group');
-            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${getDatesGridHtml(true, true)}${finalCacheHtml}`;
+            tooltipHtmlStr = `<div class="insane-tooltip-title insane-tooltip-warning"><span>⚠️</span> ${t.modOutdated}</div>${getDatesGridHtml(true, true)}${exactTimeWarningHtml}${finalCacheHtml}`;
             bindTooltip(targetEl, tooltipHtmlStr);
         }
 
-        // Força a atualização do tooltip se o mouse estiver em cima durante o render (ex: retorno da ociosidade)
         if (container.matches(':hover')) {
             tooltipGlobal.innerHTML = tooltipHtmlStr;
             refreshTooltipTimers();
