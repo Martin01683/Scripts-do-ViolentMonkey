@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.21.3
+// @version      26.06.21.4
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -612,7 +612,7 @@
     }
 
     const CACHE_PREFIX = `SWDD_${currentAppId}_`;
-    const CACHE_TIME_STEAM_MS = 10 * 60 * 1000; // 10 Minutos para expiração dos metadados da Steam
+    const CACHE_TIME_STEAM_MS = 60 * 60 * 1000; // 60 Minutos para expiração dos metadados da Steam
     const STEAM_NO_DATE = 'NO_DATE';
     const STEAM_FETCH_ERROR = 'FETCH_ERROR';
     const STEAM_CACHE_KEY = `${CACHE_PREFIX}Steam`;
