@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.21.2
+// @version      26.06.21.3
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -411,7 +411,7 @@
             name: "Insane GH",
             type: "full_db",
             url: jsonUrl,
-            cacheTime: 10 * 60 * 1000,
+            cacheTime: 60 * 60 * 1000,
             parser: (responseText) => {
                 const json = JSON.parse(responseText);
                 const files = Array.isArray(json?.files) ? json.files : [];
@@ -443,7 +443,6 @@
             forumUrl: "https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692",
             mirrors: [
                 MIRROR_TEMPLATES.insane_gh_json('paralives', 'https://raw.githubusercontent.com/AORUS834/947e26abefdb9eb0a9cd292d2ee691d9/refs/heads/main/files.json'),
-                MIRROR_TEMPLATES.insane_php('paralives', 'paralives'),
                 MIRROR_TEMPLATES.skymods('1118520')
             ]
         },
