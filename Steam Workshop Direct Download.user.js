@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.21.6
+// @version      26.06.21.7
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1219,10 +1219,13 @@
 
                 // Implementa o Tooltip Customizado via data-attribute para renderização no motor principal.
                 const tooltipDataAttr = item.tooltip ? `data-swdd-tooltip="${escapeHTML(item.tooltip)}"` : '';
+                // Marca o tooltip como "aviso" (amarelo) quando sinalizado pela config do botão,
+                // ex: o lembrete de "leia as regras do site/fórum antes de pedir".
+                const tooltipWarnAttr = item.tooltipWarn ? 'data-swdd-tooltip-warn="1"' : '';
 
                 // O ícone será inserido condicionalmente apenas se houver configuração de icon
                 menuHtml += `
-                    <a ${idAttr} ${hrefAttr} ${classAttr} ${tooltipDataAttr} style="${blockStyle}">
+                    <a ${idAttr} ${hrefAttr} ${classAttr} ${tooltipDataAttr} ${tooltipWarnAttr} style="${blockStyle}">
                         ${item.icon ? `<span class="swdd-dropdown-icon">${escapeHTML(item.icon)}</span> ` : ''}<span class="swdd-dropdown-text">${escapeHTML(item.text)}</span>
                     </a>
                 `;
@@ -1238,7 +1241,9 @@
             // Vincula dinamicamente a apresentação visual do painel flutuante aos menus suspensos
             dropdownGlobal.querySelectorAll('a[data-swdd-tooltip]').forEach(link => {
                 const tooltipText = link.getAttribute('data-swdd-tooltip');
-                const tooltipHtml = `<div class="swdd-tooltip-row" style="white-space: normal !important; max-width: 220px; line-height: 1.4;">${escapeHTML(tooltipText)}</div>`;
+                const isWarnTip = link.hasAttribute('data-swdd-tooltip-warn');
+                const tooltipColor = isWarnTip ? '#F59E0B' : 'inherit';
+                const tooltipHtml = `<div class="swdd-tooltip-row" style="white-space: normal !important; max-width: 220px; line-height: 1.4; color: ${tooltipColor};">${escapeHTML(tooltipText)}</div>`;
                 bindTooltip(link, tooltipHtml);
             });
 
@@ -1792,7 +1797,10 @@
             };
 
             const subTipText = GAME.forumUrl ? t.modNotListedSubTip : t.modUnavailableSubTip;
-            const subTipHtml = subTipText ? `<div style="color: #8f98a0; font-size: 11px; margin-top: 4px; white-space: normal !important; line-height: 1.4;">${subTipText}</div>` : '';
+            // Aviso de "leia as regras" usa amarelo (cor de warning) para chamar mais atenção;
+            // o caso de mirror indisponível mantém o cinza neutro de informação.
+            const subTipColor = GAME.forumUrl ? '#F59E0B' : '#8f98a0';
+            const subTipHtml = subTipText ? `<div style="color: ${subTipColor}; font-size: 11px; margin-top: 4px; white-space: normal !important; line-height: 1.4;">${subTipText}</div>` : '';
 
             const tooltipHtmlStr = buildTooltip({
                 stateClass: 'error',
@@ -1872,7 +1880,10 @@
                     disabled: !GAME.forumUrl,
                     tooltip: GAME.forumUrl
                         ? t.requestUpdateTip
-                        : t.noForumTip
+                        : t.noForumTip,
+                    // Sinaliza que esse tooltip é o aviso de "leia as regras" (amarelo),
+                    // e não o erro neutro de "nenhum fórum cadastrado".
+                    tooltipWarn: !!GAME.forumUrl
                 }
             ]
         };
