@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.21.8
+// @version      26.06.21.10
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -436,13 +436,28 @@
     /**
      * @typedef {Object} GameConfig
      * @property {string} [forumUrl] - (Opcional) URL do tópico oficial do jogo no fórum (ex: CS.RIN) para pedidos.
-     * @property {Array<MirrorTemplate>} mirrors - Lista de templates (provedores) que hospedam os mods deste jogo.
+     * @property {Array<MirrorTemplate>} mirrors - Lista de templates (provedores) EXCLUSIVOS/manuais deste jogo,
+     *           em ORDEM DE PRIORIDADE: o primeiro mirror da lista que retornar uma versão em dia "vence" a busca
+     *           (ver getBestModFromMirrors()), então a ordem aqui declarada importa.
+     *           Os mirrors universais (MÓDULO 1.3) são SEMPRE mesclados automaticamente ao final desta lista
+     *           pelo resolveGameConfig() — a menos que:
+     *             a) o mesmo mirror universal já tenha sido declarado manualmente aqui (basta incluir, por
+     *                exemplo, MIRROR_TEMPLATES.skymods(appId) na posição desejada; a mesclagem automática
+     *                detecta o "id" repetido e não o duplica — isso permite controlar a ordem/prioridade
+     *                de busca de um mirror universal especificamente para este jogo); ou
+     *             b) o "id" desse mirror universal esteja listado em "excludeUniversalMirrors" abaixo.
+     * @property {Array<string>} [excludeUniversalMirrors] - (Opcional) Lista de "id"s de mirrors universais
+     *           que NÃO devem ser pesquisados para este jogo específico (opt-out por jogo). Útil quando um
+     *           mirror universal é sabidamente incompatível/irrelevante para este título.
+     *           Exemplo: excludeUniversalMirrors: ['smods_1118520']
      */
     const GAMES_CONFIG = {
         '1118520': { // Paralives
             forumUrl: "https://cs.rin.ru/forum/viewtopic.php?f=10&t=158692",
             mirrors: [
                 MIRROR_TEMPLATES.insane_gh_json('paralives', 'https://raw.githubusercontent.com/AORUS834/947e26abefdb9eb0a9cd292d2ee691d9/refs/heads/main/files.json'),
+                // Mirror universal posicionado manualmente: fica em 2º lugar na prioridade de busca
+                // para este jogo e, por já estar declarado aqui, não é duplicado pela mesclagem automática.
                 MIRROR_TEMPLATES.skymods('1118520')
             ]
         },
@@ -456,17 +471,27 @@
     };
 
     // ========================================================================
-    // MÓDULO 1.3: MIRRORS UNIVERSAIS (Modo Dinâmico / Fallback)
+    // MÓDULO 1.3: MIRRORS UNIVERSAIS (Modo Dinâmico / Mesclagem Automática)
     // Mirrors que indexam múltiplos jogos simultaneamente.
-    // Ativado automaticamente caso o AppID da página não conste no GAMES_CONFIG.
+    //
+    // Agora estes mirrors são SEMPRE incluídos na busca de QUALQUER jogo — inclusive
+    // jogos com configuração manual em GAMES_CONFIG. O resolveGameConfig() mescla a
+    // lista de mirrors manuais (prioridade máxima, busca primeiro) com os mirrors
+    // universais (mesclados em seguida, exceto os que já foram declarados manualmente
+    // ou explicitamente excluídos via "excludeUniversalMirrors" — ver MÓDULO 1.2).
+    //
+    // Para jogos SEM entrada em GAMES_CONFIG, esta lista continua sendo a ÚNICA fonte
+    // de mirrors (Modo Dinâmico "puro"), e nesse caso o script ainda faz a sondagem de
+    // suporte (GameSupportManager) para não injetar botões em jogos que comprovadamente
+    // não têm mods hospedados em nenhum mirror universal.
     // ========================================================================
     /**
-     * → Para DESATIVAR o suporte universal, deixe a lista vazia: => []
-     * Nesse caso, o script só funcionará para os jogos listados em GAMES_CONFIG.
-     * 
-     * → Se a lista estiver vazia e o AppID não estiver em GAMES_CONFIG, 
+     * → Para DESATIVAR completamente o suporte universal (tanto no modo dinâmico "puro"
+     * quanto na mesclagem automática com jogos de GAMES_CONFIG), deixe a lista vazia: => []
+     *
+     * → Se a lista estiver vazia E o AppID não estiver em GAMES_CONFIG,
      * o script não injetará nenhum botão na página.
-     * 
+     *
      * @param {string} appId - AppID do jogo detectado na URL.
      * @returns {Array} Lista de templates de mirrors.
      */
@@ -575,17 +600,47 @@
     };
 
     /**
-     * Resolve a configuração final do jogo, decidindo se usará as configurações estáticas
-     * (GAMES_CONFIG) ou se precisará inicializar as rotinas dinâmicas.
+     * Resolve a configuração final do jogo, MESCLANDO os mirrors manuais (GAMES_CONFIG, se
+     * existirem) com os mirrors universais (UNIVERSAL_MIRRORS).
+     *
+     * Regras de mesclagem:
+     *  1. Mirrors universais são sempre buscados, mesmo quando o jogo já tem configuração
+     *     manual em GAMES_CONFIG.
+     *  2. Mirrors manuais SEMPRE têm prioridade: entram primeiro na lista final, e como
+     *     getBestModFromMirrors() para no primeiro mirror que retornar uma versão em dia,
+     *     eles são efetivamente consultados antes dos universais mesclados automaticamente.
+     *  3. Se um mirror universal já foi declarado manualmente dentro de GAMES_CONFIG[appId].mirrors
+     *     (mesmo "id"), a posição declarada manualmente define sua prioridade e ele NÃO é
+     *     duplicado pela mesclagem automática.
+     *  4. Mirrors universais cujo "id" conste em GAMES_CONFIG[appId].excludeUniversalMirrors
+     *     são ignorados (o jogo fica de fora da busca naquele mirror específico).
      */
     function resolveGameConfig(appId) {
-        if (GAMES_CONFIG[appId]) return { config: GAMES_CONFIG[appId], isDynamic: false };
+        const universalMirrors = UNIVERSAL_MIRRORS(appId);
+        const explicitConfig = GAMES_CONFIG[appId];
 
-        const dynamicMirrors = UNIVERSAL_MIRRORS(appId);
-        if (dynamicMirrors.length === 0) return { config: null, isDynamic: true };
+        if (explicitConfig) {
+            const manualMirrors = explicitConfig.mirrors || [];
+            const manualMirrorIds = new Set(manualMirrors.map(m => m.id));
+            const excludedIds = new Set(explicitConfig.excludeUniversalMirrors || []);
 
-        const fallbackForumUrl = dynamicMirrors.find(m => m.requestUrl)?.requestUrl || null;
-        return { config: { forumUrl: fallbackForumUrl, mirrors: dynamicMirrors }, isDynamic: true };
+            // Mirrors universais que ainda não foram posicionados manualmente nem excluídos para este jogo
+            const autoMergedUniversalMirrors = universalMirrors.filter(m => !manualMirrorIds.has(m.id) && !excludedIds.has(m.id));
+
+            return {
+                config: {
+                    forumUrl: explicitConfig.forumUrl || null,
+                    // Manuais primeiro (prioridade máxima) → universais mesclados automaticamente depois
+                    mirrors: [...manualMirrors, ...autoMergedUniversalMirrors]
+                },
+                isDynamic: false
+            };
+        }
+
+        if (universalMirrors.length === 0) return { config: null, isDynamic: true };
+
+        const fallbackForumUrl = universalMirrors.find(m => m.requestUrl)?.requestUrl || null;
+        return { config: { forumUrl: fallbackForumUrl, mirrors: universalMirrors }, isDynamic: true };
     }
 
     const { config: GAME, isDynamic: isGameDynamic } = resolveGameConfig(currentAppId);
@@ -875,14 +930,14 @@
                     // Pega o tema do mirror consultado (ou cai no tema de erro por padrão, caso ausente)
                     const themeObj = this.THEMES[mirror.theme] || this.THEMES.error;
                     const dotColor = themeObj.color;
-                    const dotHtml = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${dotColor}; margin-right: 6px; box-shadow: 0 0 3px ${dotColor}60;"></span>`;
+                    const dotHtml = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${dotColor}; margin-left: 6px; box-shadow: 0 0 3px ${dotColor}60;"></span>`;
                     // Quando o mirror falhou ao responder (Mirror Error), a cor da bolinha sozinha
                     // passa despercebida. Reforça com o mesmo ícone de aviso já usado no bloco de
                     // Status do Cache (⚠️), deixando o erro óbvio também aqui em "Mirrors verificados".
                     const errorIconHtml = mirror.error
                         ? `<span style="margin-left: 4px; font-size: 10px;" title="${escapeHTML(t.mirrorError)}">⚠️</span>`
                         : '';
-                    return `<span style="display: inline-flex; align-items: center; font-size: 11.5px; color: #E2E8F0; font-weight: 500; white-space: nowrap;">${dotHtml}${escapeHTML(mirror.name)}${errorIconHtml}</span>`;
+                    return `<span style="display: inline-flex; align-items: center; font-size: 11.5px; color: #E2E8F0; font-weight: 500; white-space: nowrap;">${escapeHTML(mirror.name)}${errorIconHtml}${dotHtml}</span>`;
                 })
                 .join('');
 
@@ -893,10 +948,10 @@
             // encontrada/selecionada entre os mirrors. No cenário de mod não encontrado
             // (showBestAvailable: false) essa linha seria contraditória com o título
             // "Não encontrado no mirror" logo acima. Além disso, só exibimos quando mais
-            // de 2 mirrors foram verificados — com 1 ou 2 mirrors não há de fato uma
+            // de 1 mirror foi verificado — com apenas 1 mirror não há de fato uma
             // "seleção" relevante entre opções a se comunicar ao usuário.
             let bestAvailableHtml = '';
-            if (showBestAvailable && consultedMirrors.length > 2) {
+            if (showBestAvailable && consultedMirrors.length > 1) {
                 const txtBest = t.bestAvailable || 'Melhor versão disponível selecionada';
                 // Cor verde puxada diretamente do Dicionário Central de Temas, em vez de fixa no CSS
                 const successColor = this.THEMES.success.color;
