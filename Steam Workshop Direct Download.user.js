@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.02
+// @version      26.06.22.03
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -930,14 +930,13 @@
                     // Pega o tema do mirror consultado (ou cai no tema de erro por padrão, caso ausente)
                     const themeObj = this.THEMES[mirror.theme] || this.THEMES.error;
                     const dotColor = themeObj.color;
-                    const dotHtml = `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${dotColor}; margin-left: 6px; box-shadow: 0 0 3px ${dotColor}60;"></span>`;
-                    // Quando o mirror falhou ao responder (Mirror Error), a cor da bolinha sozinha
-                    // passa despercebida. Reforça com o mesmo ícone de aviso já usado no bloco de
-                    // Status do Cache (⚠️), deixando o erro óbvio também aqui em "Mirrors verificados".
-                    const errorIconHtml = mirror.error
-                        ? `<span style="margin-left: 4px; font-size: 10px;" title="${escapeHTML(t.mirrorError)}">⚠️</span>`
-                        : '';
-                    return `<span style="display: inline-flex; align-items: center; font-size: 11.5px; color: #E2E8F0; font-weight: 500; white-space: nowrap;">${escapeHTML(mirror.name)}${errorIconHtml}${dotHtml}</span>`;
+                    // Indicador visual: ícone wifi-off SVG (Lucide Icons) quando há erro de
+                    // conexão — substitui a bolinha inteiramente para deixar claro que o
+                    // problema é de rede/acesso, sem exibir os dois elementos juntos.
+                    const indicatorHtml = mirror.error
+                        ? `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="${dotColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 6px; flex-shrink: 0;" title="${escapeHTML(t.mirrorError)}"><path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/></svg>`
+                        : `<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${dotColor}; margin-left: 6px; box-shadow: 0 0 3px ${dotColor}60;"></span>`;
+                    return `<span style="display: inline-flex; align-items: center; font-size: 11.5px; color: #E2E8F0; font-weight: 500; white-space: nowrap;">${escapeHTML(mirror.name)}${indicatorHtml}</span>`;
                 })
                 .join('');
 
