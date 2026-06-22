@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.04
+// @version      26.06.22.05
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -930,7 +930,7 @@
                     // Pega o tema do mirror consultado (ou cai no tema de erro por padrão, caso ausente)
                     const themeObj = this.THEMES[mirror.theme] || this.THEMES.error;
                     const dotColor = themeObj.color;
-                    // Indicador visual: ícone wifi-off SVG (Lucide Icons) quando há erro de
+                    // Indicador visual: ícone globe-off SVG (Lucide Icons) quando há erro de
                     // conexão — substitui a bolinha inteiramente para deixar claro que o
                     // problema é de rede/acesso, sem exibir os dois elementos juntos.
                     const indicatorHtml = mirror.error
@@ -1966,7 +1966,7 @@
             btnConfig.stateClass = TemplateEngine.THEMES.error.stateClass;
             tooltipHtmlStr = buildTooltip({
                 stateClass: 'error',
-                icon: '🔌',
+                icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643"/><path d="M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929"/><path d="M15.892 10.234A14.5 14.5 0 0 0 12 2a10 10 0 0 0-3.643.687"/><path d="M17.656 12H22"/><path d="M19.071 19.071A10 10 0 0 1 12 22 14.5 14.5 0 0 1 8.44 8.45"/><path d="M2 12h10"/><path d="m2 2 20 20"/></svg>',
                 titleText: t.steamErrorTip,
                 bodyHtml: TemplateEngine.createTooltipGrid(false, strSteam, true, mirrorName, strMirror, exactTimeWarningHtml)
             });
