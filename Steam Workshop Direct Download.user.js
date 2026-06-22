@@ -427,17 +427,24 @@
      */
     const MIRROR_TEMPLATES = {
         skymods: (appId) => {
-            // Verifica se o jogo atual é o Cities: Skylines
-            const isCitiesSkylines = appId === '255710';
+            // Mapeamento de jogos com subdomínios exclusivos no ecossistema Skymods
+            const smodsSubdomains = {
+                '255710': 'smods.ru',                       // Cities: Skylines
+                '394360': 'hearts-of-iron-4.smods.ru',      // Hearts of Iron IV
+                '281990': 'stellaris.smods.ru'              // Stellaris
+            };
+
+            // Verifica se o jogo atual possui um domínio próprio
+            const customDomain = smodsSubdomains[appId];
 
             return {
                 id: `smods_${appId}`,
                 name: "Skymods",
                 type: "per_mod",
 
-                // Redireciona a URL dinamicamente com base no jogo
-                url: (modId) => isCitiesSkylines
-                    ? `https://smods.ru/?s=${modId}`
+                // Se o jogo tem domínio próprio, usa ele. Se não, usa o catálogo universal.
+                url: (modId) => customDomain
+                    ? `https://${customDomain}/?s=${modId}`
                     : `https://catalogue.smods.ru/?s=${modId}&app=${appId}`,
 
                 cacheTime: 60 * 60 * 1000, // Cache de 1 hora
@@ -504,9 +511,8 @@
                     }
                     return bestMatch;
                 },
-                // Desativa a sondagem dinâmica (probe) se for Cities: Skylines, evitando o bloqueio.
-                // Mantém ativo para os outros jogos do catalogue.
-                gameProbe: isCitiesSkylines ? null : {
+                // Desativa a sondagem dinâmica (probe) se o jogo tiver site próprio, evitando o bloqueio.
+                gameProbe: customDomain ? null : {
                     url: `https://catalogue.smods.ru/?app=${appId}`,
                     parser: (responseText) => {
                         const doc = new DOMParser().parseFromString(responseText, "text/html");
