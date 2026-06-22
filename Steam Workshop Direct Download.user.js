@@ -2,7 +2,7 @@
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
 // @version      26.06.22.40
-// @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo. Fallback à prova de idiomas (incluindo asiáticos), extração de hora exata e detector de discrepância real.
+// @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
