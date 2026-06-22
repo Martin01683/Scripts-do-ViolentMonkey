@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.40
+// @version      26.06.22.50
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1191,6 +1191,34 @@
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
             return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
+        },
+
+        /**
+         * MÓDULO DE AVISOS MODULAR (Notice System)
+         * Centraliza a criação de todos os avisos/notificações exibidos no tooltip.
+         * Garante estilo consistente e suporte nativo a quebra de linha automática (via CSS max-width)
+         * e manual (via \n ou <br> no texto da tradução).
+         *
+         * Por que aqui: anteriormente cada aviso era gerado inline com <div style="...">
+         * espalhados pelo renderWidget, com estilos duplicados e sem max-width no tooltip,
+         * causando textos longos em linha única. Esta função resolve ambos os problemas.
+         *
+         * @param {'info'|'warning'|'error'} type - Tipo do aviso (define cor e ícone)
+         * @param {string} message - Texto do aviso. Suporta \n e <br> para quebras explícitas.
+         * @returns {string} HTML do aviso formatado e pronto para inserção no tooltip
+         */
+        createNotice(type, message) {
+            const icons = { info: 'ℹ️', warning: '⚠️', error: '🚫' };
+            const icon = icons[type] || icons.info;
+            // Normaliza quebras de linha: divide em <br> (variantes) e \n, escapa cada segmento e reune
+            const safeHtml = String(message)
+                .split(/<br\s*\/?>|\n/i)
+                .map(line => escapeHTML(line))
+                .join('<br>');
+            return `<div class="swdd-notice swdd-notice-${escapeHTML(type)}">` +
+                   `<span class="swdd-notice-icon">${icon}</span>` +
+                   `<span class="swdd-notice-text">${safeHtml}</span>` +
+                   `</div>`;
         }
     };
 
@@ -1216,7 +1244,7 @@
         .swdd-global-dropdown:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .swdd-global-dropdown a { padding: 10px 12px; color: #acb2b8; text-decoration: none; font-size: 12px; transition: background 0.2s; font-family: "Motiva Sans", sans-serif; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none !important; -webkit-user-select: none !important; -moz-user-select: none !important; }
         .swdd-global-dropdown a:hover { background: #3d4450; color: #fff; }
-        .swdd-custom-tooltip { position: fixed !important; margin: 0 !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; padding: 12px !important; color: #acb2b8 !important; font-family: "Motiva Sans", Arial, sans-serif !important; font-size: 13px !important; box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important; pointer-events: none !important; opacity: 0; transition: opacity 0.1s; white-space: nowrap !important; }
+        .swdd-custom-tooltip { position: fixed !important; margin: 0 !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; padding: 12px !important; color: #acb2b8 !important; font-family: "Motiva Sans", Arial, sans-serif !important; font-size: 13px !important; box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important; pointer-events: none !important; opacity: 0; transition: opacity 0.1s; white-space: nowrap !important; max-width: 300px !important; }
         .swdd-custom-tooltip.show { opacity: 1 !important; }
         .swdd-custom-tooltip:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .swdd-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
@@ -1225,6 +1253,12 @@
         #swdd-widget-main { display: inline-flex; height: 34px; align-items: center; }
         .swdd-widget-container { position: relative; z-index: 10; display: inline-flex; align-items: center; }
         .swdd-widget-container:hover { z-index: 9999; }
+        .swdd-notice { display: flex; align-items: flex-start; gap: 5px; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.5; }
+        .swdd-notice-icon { flex-shrink: 0; }
+        .swdd-notice-text { flex: 1; min-width: 0; word-break: break-word; }
+        .swdd-notice-info { color: #66c0f4; }
+        .swdd-notice-warning { color: #F59E0B; }
+        .swdd-notice-error { color: #ff6b6b; }
     `;
     document.head.appendChild(style);
 
@@ -2077,10 +2111,8 @@
             };
 
             const subTipText = GAME.forumUrl ? t.modNotListedSubTip : t.modUnavailableSubTip;
-            // Aviso de "leia as regras" usa amarelo (cor de warning) para chamar mais atenção;
-            // o caso de mirror indisponível mantém o cinza neutro de informação.
-            const subTipColor = GAME.forumUrl ? '#F59E0B' : '#8f98a0';
-            const subTipHtml = subTipText ? `<div style="color: ${subTipColor}; font-size: 11px; margin-top: 4px; white-space: normal !important; line-height: 1.4;">${subTipText}</div>` : '';
+            // 'warning' (amarelo) para "leia as regras"; 'info' (azul) para mirror indisponível.
+            const subTipHtml = subTipText ? TemplateEngine.createNotice(GAME.forumUrl ? 'warning' : 'info', subTipText) : '';
 
             const tooltipHtmlStr = buildTooltip({
                 stateClass: 'error',
@@ -2121,21 +2153,21 @@
         // ao usuário de que o link do mirror estava quebrado/inseguro.
         const linkInvalid = !!modData.link && safeLink === '#';
 
+        // Avisos contextuais gerados via sistema modular (createNotice):
+        // Tipo 'info' = ℹ️ azul | 'warning' = ⚠️ amarelo | 'error' = 🚫 vermelho.
+        // O max-width do tooltip garante quebra de linha automática sem precisar de <br> manual nos textos longos.
         let exactTimeWarningHtml = '';
-        
-        // NOVO: Adiciona avisos de Fallback ou Divergência da API
         if (dateSteam && dateSteam.isFallback) {
-            exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">ℹ️ ${t.steamFallbackWarn}</div>`;
+            exactTimeWarningHtml += TemplateEngine.createNotice('info', t.steamFallbackWarn);
         }
         if (dateSteam && dateSteam.hasTimeMismatch) {
-            exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">⚠️ ${t.steamTimeMismatch}</div>`;
+            exactTimeWarningHtml += TemplateEngine.createNotice('warning', t.steamTimeMismatch);
         }
-
         if (!exactTime && dateMirror && dateSteam && dateSteam !== STEAM_NO_DATE && dateSteam !== STEAM_FETCH_ERROR) {
             // Se o dia coincidir (mesmo sem hora exata para comparar), solta o alerta amarelo
             const isSameDay = dateMirror.getFullYear() === dateSteam.getFullYear() && dateMirror.getMonth() === dateSteam.getMonth() && dateMirror.getDate() === dateSteam.getDate();
             if (isSameDay) {
-                exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">⚠️ ${t.exactTimeWarn}</div>`;
+                exactTimeWarningHtml += TemplateEngine.createNotice('warning', t.exactTimeWarn);
             }
         }
 
@@ -2209,7 +2241,7 @@
                 stateClass: 'warning',
                 icon: '⚠️',
                 titleText: t.mirrorNoDate,
-                bodyHtml: `<div class="swdd-tooltip-row">${escapeHTML(t.mirrorNoDateTip)}</div>`
+                bodyHtml: TemplateEngine.createNotice('info', t.mirrorNoDateTip)
             });
         } else if (utils.isUpToDate(dateMirror, dateSteam)) {
             // Estado: mirror está na mesma versão (ou mais recente) que a Steam
