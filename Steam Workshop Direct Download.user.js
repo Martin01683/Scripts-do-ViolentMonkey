@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.07
-// @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
+// @version      26.06.22.40
+// @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo. Fallback à prova de idiomas (incluindo asiáticos), extração de hora exata e detector de discrepância real.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/browse/*
@@ -162,6 +162,141 @@
                 };
             }
         },
+
+        /**
+         * Fallback Scraper HTML: À prova de idiomas, fuso horário e região asiática.
+         * Extrai a data de atualização e HORA EXATA diretamente da DOM da página de detalhes do Mod
+         * caso a API da Valve falhe ou retorne dados divergentes.
+         */
+        parseSteamHTMLDate: function() {
+            const labels = document.querySelectorAll('.detailsStatLeft');
+            const values = document.querySelectorAll('.detailsStatRight');
+            let dateStr = "";
+
+            // Keywords universais abrangendo a maioria dos idiomas suportados pela Steam
+            const updateKeywords = ['updated', 'atualizado', 'actualizado', 'mis à jour', 'aktualisiert', 'aggiornato', 'bijgewerkt', 'opracowano', 'обновлено', 'güncellendi', '更新', '最後更新', 'última atualização'];
+
+            labels.forEach((el, i) => {
+                const text = el.textContent.toLowerCase().trim();
+                const isUpdateRow = updateKeywords.some(k => text.includes(k));
+                
+                // Se identificou a keyword na row atual, ou fallback visual (a 3ª linha na interface clássica)
+                if (isUpdateRow || (labels.length >= 3 && i === 2)) {
+                    dateStr = values[i]?.textContent || "";
+                }
+            });
+
+            if (!dateStr) return null;
+
+            let year = new Date().getFullYear();
+            let month = -1;
+            let day = -1;
+            let hours = 12; // default fallback se tudo der errado
+            let minutes = 0;
+
+            // 1. Extrai Tempo Exato (Desacoplado da posição do AM/PM para suportar idiomas asiáticos como Chinês e Coreano)
+            // A Regex agora aceita : (ocidental), 時 (JP/CN) e 시 (KR)
+            const timeMatch = dateStr.match(/(\d{1,2})[:時시]\s*(\d{2})/);
+            if (timeMatch) {
+                hours = parseInt(timeMatch[1], 10);
+                minutes = parseInt(timeMatch[2], 10);
+                
+                // Detecção de AM/PM global que não depende da ordem na frase
+                const isPM = /pm|p\.m\.|下午|午後|오후/i.test(dateStr);
+                const isAM = /am|a\.m\.|上午|午前|오전/i.test(dateStr);
+
+                if (isPM && hours < 12) hours += 12;
+                if (isAM && hours === 12) hours = 0;
+            }
+
+            // 2. Extrai Data (Formatos Asiáticos YYYY年 MM月 DD日)
+            const asianMatch = dateStr.match(/(?:(\d{4})\s*[年년])?\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]/);
+            if (asianMatch) {
+                if (asianMatch[1]) year = parseInt(asianMatch[1], 10);
+                month = parseInt(asianMatch[2], 10) - 1; // 0-indexado para o Objeto Date
+                day = parseInt(asianMatch[3], 10);
+            } else {
+                // 3. Extrai Data (Formatos Ocidentais/Cirílicos)
+                // Limpeza de conectivos de múltiplos idiomas
+                let cleanStr = dateStr.replace(/(@|at|às|de|в|о|у|den|u|kl)/gi, ' ').replace(/[.,]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+                
+                // Tabela universal de conversão de Meses para numérico (0-11)
+                const monthMap = {
+                    jan:0,janeiro:0,enero:0,янв:0,
+                    feb:1,fev:1,fevereiro:1,febrero:1,фев:1,
+                    mar:2,março:2,marzo:2,мар:2,
+                    apr:3,abr:3,abril:3,avr:3,апр:3,
+                    may:4,mai:4,maio:4,mayo:4,мая:4,
+                    jun:5,junho:5,junio:5,juin:5,июн:5,
+                    jul:6,julho:6,julio:6,juil:6,июл:6,
+                    aug:7,ago:7,agosto:7,août:7,august:7,avg:7,авг:7,
+                    sep:8,set:8,setembro:8,septiembre:8,sept:8,сен:8,
+                    oct:9,out:9,outubro:9,octubre:9,okt:9,окт:9,
+                    nov:10,novembro:10,noviembre:10,ноя:10,
+                    dec:11,dez:11,dezembro:11,diciembre:11,déc:11,дек:11
+                };
+
+                const parts = cleanStr.split(' ');
+                
+                // Determinação heurística baseada nos blocos textuais separados
+                parts.forEach(p => {
+                    // Garante que não vai confundir a hora capturada com o dia do mês
+                    if (/^\d{1,2}$/.test(p) && day === -1 && parseInt(p, 10) <= 31) {
+                        day = parseInt(p, 10);
+                    }
+                    else if (month === -1 && monthMap[p] !== undefined) month = monthMap[p];
+                    else if (month === -1 && p.length >= 3 && monthMap[p.substring(0,3)] !== undefined) month = monthMap[p.substring(0,3)];
+                    else if (/^\d{4}$/.test(p)) year = parseInt(p, 10);
+                });
+            }
+
+            if (day !== -1 && month !== -1) {
+                // Instancia usando Fuso Horário Local do Navegador (Como a própria Steam faz na UI visual)
+                const finalDate = new Date(year, month, day, hours, minutes, 0);
+                
+                // A interface da Steam omite o ano se a atualização ocorreu no ano em curso. 
+                // Corrigimos caso acidentalmente a data caia no futuro.
+                if (finalDate.getTime() > Date.now() + 86400000) finalDate.setFullYear(year - 1);
+                
+                return { date: finalDate, isFallback: true };
+            }
+            return null;
+        },
+
+        /**
+         * Fallback Scraper SSR: Direcionado para Páginas de Navegação (Listas) do Workshop.
+         * Nessas rotas, o DOM é gerado via React e esconde os timestamps Unix nativos num JSON embutido na tag Script.
+         */
+        getSteamSSRData: function() {
+            try {
+                const scripts = document.querySelectorAll('script');
+                for (const s of scripts) {
+                    if (s.textContent.includes('window.SSR.loaderData')) {
+                        const jsonMatch = s.textContent.match(/window\.SSR\.loaderData\s*=\s*(\[.*?\]);/s);
+                        if (jsonMatch) {
+                            const rawList = JSON.parse(jsonMatch[1]);
+                            const results = {};
+                            rawList.forEach(jsonStr => {
+                                try {
+                                    const data = JSON.parse(jsonStr);
+                                    if (data.results) {
+                                        data.results.forEach(item => {
+                                            if (item.publishedfileid) {
+                                                const ts = item.time_updated || item.time_created;
+                                                results[item.publishedfileid] = ts ? new Date(ts * 1000) : null;
+                                            }
+                                        });
+                                    }
+                                } catch(e) {}
+                            });
+                            return results;
+                        }
+                    }
+                }
+            } catch(e) {}
+            return null;
+        },
+
         /**
          * Extrai e converte strings de datas complexas de mirrors (como o Skymods).
          * Prioriza datas explícitas e determina se a hora exata está disponível.
@@ -678,20 +813,20 @@
     // Ícones e Emojis são aplicados separadamente pelo gerador de botões.
     // ========================================================================
     const translations = {
-        en: { checkingVersion: 'Checking Version...', mirrorError: 'Mirror Error', requestMod: 'Request Mod', modNotListed: 'Mod not listed. Click to request.', download: 'Download', downloadWarning: 'Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update', labelSteam: 'Steam:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', justNow: 'just now', minAgo: 'min ago', steamError: 'Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: 'Mirror Without Date', mirrorNoDateTip: 'Could not verify mirror version date.', clearCache: 'Clear Cache', cacheCooldown: 'Clear cache ({s}s)', idlePaused: 'Paused (Idle)', idleActive: 'Active', exactTimeWarn: 'Mirror missing time.<br>Precision uncertain.', modUnavailable: 'Mod Unavailable', modUnavailableTip: 'Not found in the mirrors', modUnavailableSubTip: 'No mirror site/forum found to submit this request', modNotListedSubTip: 'Read the site/forum rules before requesting', invalidLink: 'Invalid Link', invalidLinkTip: 'Mirror returned an invalid or unsafe link.', checkedMirrors: 'Mirrors checked:', bestAvailable: 'Best available version selected', requestUpdateTip: 'Read the site/forum rules before requesting', noForumTip: 'No mirror site/forum found to request updates for this mod.', clearCacheTip: 'Clears verification data and rechecks.' },
-        pt: { checkingVersion: 'Verificando versão...', mirrorError: 'Erro no Mirror', requestMod: 'Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: 'Baixar', downloadWarning: 'Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização', labelSteam: 'Steam:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', justNow: 'agora', minAgo: 'min atrás', steamError: 'Sem Verificar', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: 'Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', clearCache: 'Limpar Cache', cacheCooldown: 'Limpar cache ({s}s)', idlePaused: 'Pausado (Inativo)', idleActive: 'Ativo', exactTimeWarn: 'O mirror não contém hora.<br>Precisão incerta.', modUnavailable: 'Mod Indisponível', modUnavailableTip: 'Não encontrado nos mirrors', modUnavailableSubTip: 'Nenhum site/fórum dos mirrors foi encontrado<br>para fazer este pedido', modNotListedSubTip: 'Leia as regras do site/fórum antes de pedir', invalidLink: 'Link Inválido', invalidLinkTip: 'O mirror retornou um link inválido ou inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Melhor versão disponível selecionada', requestUpdateTip: 'Leia as regras do site/fórum antes de pedir', noForumTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar atualizações deste mod.', clearCacheTip: 'Limpa os dados de verificação e refaz a checagem.' },
-        es: { checkingVersion: 'Comprobando versión...', mirrorError: 'Error en Mirror', requestMod: 'Pedir mod', modNotListed: 'Mod no listado. Haz clic para pedirlo.', download: 'Descargar', downloadWarning: 'Descargar', modUpdated: 'MOD ACTUALIZADO', modOutdated: 'MOD DESACTUALIZADO', requestUpdate: 'Pedir actualización', labelSteam: 'Steam:', labelCache: 'Estado del caché:', cacheSteam: 'Steam:', justNow: 'ahora', minAgo: 'min atrás', steamError: 'No verificado', steamErrorTip: 'Fallo en la API de Steam. Versión no verificada.', mirrorNoDate: 'Mirror sin fecha', mirrorNoDateTip: 'No se pudo verificar la versión del mirror.', clearCache: 'Borrar caché', cacheCooldown: 'Borrar caché ({s}s)', idlePaused: 'Pausado (Inactivo)', idleActive: 'Activo', exactTimeWarn: 'Mirror sin hora.<br>Precisión incierta.', modUnavailable: 'Mod no disponible', modUnavailableTip: 'No encontrado en los mirrors', modUnavailableSubTip: 'No se encontró ningún sitio/foro de mirrors para hacer esta solicitud', modNotListedSubTip: 'Lee las reglas del sitio/foro antes de pedir', invalidLink: 'Enlace Inválido', invalidLinkTip: 'El mirror devolvió un enlace inválido o inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Mejor versión disponible seleccionada', requestUpdateTip: 'Lee las reglas del sitio/foro antes de pedir', noForumTip: 'No se encontró ningún sitio/foro de mirrors para solicitar actualizaciones de este mod.', clearCacheTip: 'Borra los datos de verificación y vuelve a comprobar.' },
-        fr: { checkingVersion: 'Vérification de la version...', mirrorError: 'Erreur Mirror', requestMod: 'Demander le mod', modNotListed: 'Mod non listé. Cliquez pour le demander.', download: 'Télécharger', downloadWarning: 'Télécharger', modUpdated: 'MOD À JOUR', modOutdated: 'MOD OBSOLÈTE', requestUpdate: 'Demander une mise à jour', labelSteam: 'Steam:', labelCache: 'État du cache:', cacheSteam: 'Steam:', justNow: 'à l\'instant', minAgo: 'min', steamError: 'Non vérifié', steamErrorTip: 'Erreur de l\'API Steam. Version non vérifiée.', mirrorNoDate: 'Mirror sans date', mirrorNoDateTip: 'Impossible de vérifier la version du mirror.', clearCache: 'Vider le cache', cacheCooldown: 'Vider ({s}s)', idlePaused: 'En pause (Inactif)', idleActive: 'Actif', exactTimeWarn: 'Heure manquante dans le mirror.<br>Précision incertaine.', modUnavailable: 'Mod indisponible', modUnavailableTip: 'Introuvable dans les mirrors', modUnavailableSubTip: 'Aucun site/forum de mirrors trouvé pour faire cette demande', modNotListedSubTip: 'Lisez les règles du site/forum avant de faire une demande', invalidLink: 'Lien invalide', invalidLinkTip: 'Le mirror a renvoyé un lien invalide ou non sécurisé.', checkedMirrors: 'Mirrors vérifiés:', bestAvailable: 'Meilleure version disponible sélectionnée', requestUpdateTip: 'Lisez les règles du site/forum avant de faire une demande', noForumTip: "Aucun site/forum de mirrors trouvé pour demander des mises à jour de ce mod.", clearCacheTip: 'Efface les données de vérification et relance la vérification.' },
-        de: { checkingVersion: 'Version wird geprüft...', mirrorError: 'Mirror-Fehler', requestMod: 'Mod anfragen', modNotListed: 'Mod nicht gelistet. Zum Anfragen klicken.', download: 'Herunterladen', downloadWarning: 'Herunterladen', modUpdated: 'MOD AKTUELL', modOutdated: 'MOD VERALTET', requestUpdate: 'Update anfragen', labelSteam: 'Steam:', labelCache: 'Cache-Status:', cacheSteam: 'Steam:', justNow: 'gerade eben', minAgo: 'Min. her', steamError: 'Nicht verifiziert', steamErrorTip: 'Steam API nicht erreichbar. Version nicht verifiziert.', mirrorNoDate: 'Mirror ohne Datum', mirrorNoDateTip: 'Mirror-Version konnte nicht verifiziert werden.', clearCache: 'Cache leeren', cacheCooldown: 'Cache leeren ({s}s)', idlePaused: 'Pausiert (Inaktiv)', idleActive: 'Aktiv', exactTimeWarn: 'Mirror ohne Uhrzeit.<br>Präzision ungewiss.', modUnavailable: 'Mod nicht verfügbar', modUnavailableTip: 'Nicht in den Mirrors gefunden', modUnavailableSubTip: 'Keine Mirror-Seite/Forum gefunden, um diese Anfrage zu stellen', modNotListedSubTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', invalidLink: 'Ungültiger Link', invalidLinkTip: 'Der Mirror hat einen ungültigen oder unsicheren Link zurückgegeben.', checkedMirrors: 'Überprüfte Mirrors:', bestAvailable: 'Beste verfügbare Version ausgewählt', requestUpdateTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', noForumTip: 'Keine Mirror-Seite/Forum gefunden, um Updates für diesen Mod anzufragen.', clearCacheTip: 'Löscht die Überprüfungsdaten und prüft erneut.' },
-        it: { checkingVersion: 'Controllo versione...', mirrorError: 'Errore Mirror', requestMod: 'Richiedi mod', modNotListed: 'Mod non presente. Clicca per richiederla.', download: 'Scarica', downloadWarning: 'Scarica', modUpdated: 'MOD AGGIORNATA', modOutdated: 'MOD NON AGGIORNATA', requestUpdate: 'Richiedi aggiornamento', labelSteam: 'Steam:', labelCache: 'Stato cache:', cacheSteam: 'Steam:', justNow: 'adesso', minAgo: 'min fa', steamError: 'Non verificato', steamErrorTip: 'API Steam non raggiungibile. Versione non verificata.', mirrorNoDate: 'Mirror senza data', mirrorNoDateTip: 'Impossibile verificare la versione del mirror.', clearCache: 'Svuota cache', cacheCooldown: 'Svuota cache ({s}s)', idlePaused: 'In pausa (Inattivo)', idleActive: 'Attivo', exactTimeWarn: 'Mirror senza ora.<br>Precisione incerta.', modUnavailable: 'Mod non disponibile', modUnavailableTip: 'Non trovato nei mirror', modUnavailableSubTip: 'Nessun sito/forum di mirror trovato per effettuare questa richiesta', modNotListedSubTip: 'Leggi le regole del sito/forum prima di richiedere', invalidLink: 'Link non valido', invalidLinkTip: 'Il mirror ha restituito un link non valido o non sicuro.', checkedMirrors: 'Mirrors controllati:', bestAvailable: 'Migliore versione disponibile selezionata', requestUpdateTip: 'Leggi le regole del sito/forum prima di richiedere', noForumTip: 'Nessun sito/forum di mirror trovato per richiedere aggiornamenti di questa mod.', clearCacheTip: 'Cancella i dati di verifica e ricontrolla.' },
-        nl: { checkingVersion: 'Versie controleren...', mirrorError: 'Mirrorfout', requestMod: 'Mod aanvragen', modNotListed: 'Mod staat niet in de lijst. Klik om aan te vragen.', download: 'Downloaden', downloadWarning: 'Downloaden', modUpdated: 'MOD IS UP-TO-DATE', modOutdated: 'MOD IS VEROUDERD', requestUpdate: 'Update aanvragen', labelSteam: 'Steam:', labelCache: 'Cache-status:', cacheSteam: 'Steam:', justNow: 'zojuist', minAgo: 'min geleden', steamError: 'Ongecontroleerd', steamErrorTip: 'Steam API onbereikbaar. Versie niet gecontroleerd.', mirrorNoDate: 'Mirror zonder datum', mirrorNoDateTip: 'Kon de mirrorversie niet verifiëren.', clearCache: 'Cache wissen', cacheCooldown: 'Cache wissen ({s}s)', idlePaused: 'Gepauzeerd (Inactief)', idleActive: 'Actief', exactTimeWarn: 'Mirror mist tijd.<br>Precisie onzeker.', modUnavailable: 'Mod niet beschikbaar', modUnavailableTip: 'Niet gevonden in de mirrors', modUnavailableSubTip: 'Geen mirror-site/forum gevonden om deze aanvraag te doen', modNotListedSubTip: 'Lees de regels van de site/het forum voordat je een aanvraag doet', invalidLink: 'Ongeldige link', invalidLinkTip: 'De mirror gaf een ongeldige of onveilige link terug.', checkedMirrors: 'Gecontroleerde mirrors:', bestAvailable: 'Beste beschikbare versie geselecteerd', requestUpdateTip: 'Lees de regels van de site/het forum voordat je een aanvraag doet', noForumTip: 'Geen mirror-site/forum gevonden om updates voor deze mod aan te vragen.', clearCacheTip: 'Wist de verificatiegegevens en controleert opnieuw.' },
-        pl: { checkingVersion: 'Sprawdzanie wersji...', mirrorError: 'Błąd Mirrora', requestMod: 'Poproś o mod', modNotListed: 'Mod nie jest na liście. Kliknij, aby poprosić.', download: 'Pobierz', downloadWarning: 'Pobierz', modUpdated: 'MOD AKTUALNY', modOutdated: 'MOD NIEAKTUALNY', requestUpdate: 'Poproś o aktualizację', labelSteam: 'Steam:', labelCache: 'Stan pamięci podręcznej:', cacheSteam: 'Steam:', justNow: 'właśnie teraz', minAgo: 'min temu', steamError: 'Niezweryfikowane', steamErrorTip: 'API Steam niedostępne. Wersja niezweryfikowana.', mirrorNoDate: 'Mirror bez daty', mirrorNoDateTip: 'Nie można zweryfikować wersji mirrora.', clearCache: 'Wyczyść pamięć', cacheCooldown: 'Wyczyść pamięć ({s}s)', idlePaused: 'Wstrzymano (Bezczynny)', idleActive: 'Aktywny', exactTimeWarn: 'Brak godziny w mirrorze.<br>Precyzja niepewna.', modUnavailable: 'Mod niedostępny', modUnavailableTip: 'Nie znaleziono w mirrorach', modUnavailableSubTip: 'Nie znaleziono strony/forum mirrora do złożenia tej prośby', modNotListedSubTip: 'Przeczytaj zasady strony/forum przed złożeniem prośby', invalidLink: 'Nieprawidłowy link', invalidLinkTip: 'Mirror zwrócił nieprawidłowy lub niebezpieczny link.', checkedMirrors: 'Sprawdzone mirrory:', bestAvailable: 'Wybrano najlepszą dostępną wersję', requestUpdateTip: 'Przeczytaj zasady strony/forum przed złożeniem prośby', noForumTip: 'Nie znaleziono strony/forum mirrora do proszenia o aktualizacje tego moda.', clearCacheTip: 'Czyści dane weryfikacji i sprawdza ponownie.' },
-        ru: { checkingVersion: 'Проверка версии...', mirrorError: 'Ошибка зеркала', requestMod: 'Запросить мод', modNotListed: 'Мода нет в списке. Нажмите, чтобы запросить.', download: 'Скачать', downloadWarning: 'Скачать', modUpdated: 'МОД АКТУАЛЕН', modOutdated: 'МОД УСТАРЕЛ', requestUpdate: 'Запросить обновление', labelSteam: 'Steam:', labelCache: 'Статус кэша:', cacheSteam: 'Steam:', justNow: 'только что', minAgo: 'мин назад', steamError: 'Не проверено', steamErrorTip: 'API Steam недоступен. Версия не проверена.', mirrorNoDate: 'Зеркало без даты', mirrorNoDateTip: 'Не удалось проверить версию зеркала.', clearCache: 'Очистить кэш', cacheCooldown: 'Очистить кэш ({s}s)', idlePaused: 'Пауза (Бездействие)', idleActive: 'Активно', exactTimeWarn: 'На зеркале нет времени.<br>Точность не гарантируется.', modUnavailable: 'Мод недоступен', modUnavailableTip: 'Не найдено на зеркалах', modUnavailableSubTip: 'Сайт/форум зеркала для этого запроса не найден', modNotListedSubTip: 'Прочитайте правила сайта/форума перед запросом', invalidLink: 'Неверная ссылка', invalidLinkTip: 'Зеркало вернуло неверную или небезопасную ссылку.', checkedMirrors: 'Проверенные зеркала:', bestAvailable: 'Выбрана лучшая доступная версия', requestUpdateTip: 'Прочитайте правила сайта/форума перед запросом', noForumTip: 'Не найден сайт/форум зеркала для запроса обновлений этого мода.', clearCacheTip: 'Очищает данные проверки и выполняет проверку заново.' },
-        tr: { checkingVersion: 'Sürüm kontrol ediliyor...', mirrorError: 'Mirror hatası', requestMod: 'Mod iste', modNotListed: 'Mod listede yok. İstemek için tıkla.', download: 'İndir', downloadWarning: 'İndir', modUpdated: 'MOD GÜNCEL', modOutdated: 'MOD ESKİ', requestUpdate: 'Güncelleme iste', labelSteam: 'Steam:', labelCache: 'Önbellek Durumu:', cacheSteam: 'Steam:', justNow: 'şimdi', minAgo: 'dk önce', steamError: 'Doğrulanmadı', steamErrorTip: 'Steam API\'sine ulaşılamıyor. Sürüm doğrulanmadı.', mirrorNoDate: 'Tarihsiz Mirror', mirrorNoDateTip: 'Mirror sürümü doğrulanamadı.', clearCache: 'Önbelleği Temizle', cacheCooldown: 'Önbelleği temizle ({s}s)', idlePaused: 'Duraklatıldı (Boşta)', idleActive: 'Aktif', exactTimeWarn: 'Mirror\'da saat yok.<br>Kesinlik belirsiz.', modUnavailable: 'Mod mevcut değil', modUnavailableTip: 'Mirror\'larda bulunamadı', modUnavailableSubTip: 'Bu isteği yapmak için mirror sitesi/forumu bulunamadı', modNotListedSubTip: 'İstemeden önce site/forum kurallarını okuyun', invalidLink: 'Geçersiz Bağlantı', invalidLinkTip: 'Mirror geçersiz veya güvensiz bir bağlantı döndürdü.', checkedMirrors: 'Kontrol edilen mirror\'lar:', bestAvailable: 'Mevcut en iyi sürüm seçildi', requestUpdateTip: 'İstemeden önce site/forum kurallarını okuyun', noForumTip: 'Bu mod için güncelleme istemek üzere mirror sitesi/forumu bulunamadı.', clearCacheTip: 'Doğrulama verilerini temizler ve yeniden kontrol eder.' },
-        zh: { checkingVersion: '正在检查版本...', mirrorError: '镜像错误', requestMod: '请求 Mod', modNotListed: 'Mod 未收录。点击请求。', download: '下载', downloadWarning: '下载', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已过期', requestUpdate: '请求更新', labelSteam: 'Steam:', labelCache: '缓存状态:', cacheSteam: 'Steam:', justNow: '刚刚', minAgo: '分钟前', steamError: '未验证', steamErrorTip: 'Steam API 无法访问。版本未验证。', mirrorNoDate: '镜像无日期', mirrorNoDateTip: '无法验证镜像版本。', clearCache: '清除缓存', cacheCooldown: '清除缓存 ({s}s)', idlePaused: '已暂停（空闲）', idleActive: '活跃', exactTimeWarn: '镜像缺少时间。<br>精度不确定。', modUnavailable: '模组不可用', modUnavailableTip: '镜像中未找到', modUnavailableSubTip: '未找到可用于提交此请求的镜像网站/论坛', modNotListedSubTip: '请求前请阅读网站/论坛规则', invalidLink: '链接无效', invalidLinkTip: '镜像返回了无效或不安全的链接。', checkedMirrors: '已检查的镜像:', bestAvailable: '已选择最佳可用版本', requestUpdateTip: '请求前请阅读网站/论坛规则', noForumTip: '未找到可用于请求此模组更新的镜像网站/论坛。', clearCacheTip: '清除验证数据并重新检查。' },
-        zh_tw: { checkingVersion: '正在檢查版本...', mirrorError: '鏡像錯誤', requestMod: '請求 Mod', modNotListed: 'Mod 未收錄。點擊請求。', download: '下載', downloadWarning: '下載', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已過期', requestUpdate: '請求更新', labelSteam: 'Steam:', labelCache: '快取狀態:', cacheSteam: 'Steam:', justNow: '剛剛', minAgo: '分鐘前', steamError: '未驗證', steamErrorTip: 'Steam API 無法訪問。版本未驗證。', mirrorNoDate: '鏡像無日期', mirrorNoDateTip: '無法驗證鏡像版本。', clearCache: '清除快取', cacheCooldown: '清除快取 ({s}s)', idlePaused: '已暫停（閒置）', idleActive: '活躍', exactTimeWarn: '鏡像缺少時間。<br>精度不確定。', modUnavailable: '模組不可用', modUnavailableTip: '鏡像中未找到', modUnavailableSubTip: '未找到可用於提交此請求的鏡像網站/論壇', modNotListedSubTip: '請求前請閱讀網站/論壇規則', invalidLink: '連結無效', invalidLinkTip: '鏡像返回了無效或不安全的連結。', checkedMirrors: '已檢查的鏡像:', bestAvailable: '已選擇最佳可用版本', requestUpdateTip: '請求前請閱讀網站/論壇規則', noForumTip: '未找到可用於請求此模組更新的鏡像網站/論壇。', clearCacheTip: '清除驗證資料並重新檢查。' },
-        ja: { checkingVersion: 'バージョン確認中...', mirrorError: 'ミラーエラー', requestMod: 'Modをリクエスト', modNotListed: 'Modが未登録です。クリックしてリクエスト。', download: 'ダウンロード', downloadWarning: 'ダウンロード', modUpdated: 'MODは最新です', modOutdated: 'MODは古いです', requestUpdate: '更新をリクエスト', labelSteam: 'Steam:', labelCache: 'キャッシュ状態:', cacheSteam: 'Steam:', justNow: 'たった今', minAgo: '分前', steamError: '未検証', steamErrorTip: 'Steam APIにアクセスできません。バージョン未検証。', mirrorNoDate: '日付のないミラー', mirrorNoDateTip: 'ミラーのバージョンを確認できませんでした。', clearCache: 'キャッシュを消去', cacheCooldown: 'キャッシュ消去 ({s}s)', idlePaused: '一時停止（アイドル）', idleActive: 'アクティブ', exactTimeWarn: 'ミラーに時間がありません。<br>精度は不確実です。', modUnavailable: 'Mod利用不可', modUnavailableTip: 'ミラーに見つかりません', modUnavailableSubTip: 'このリクエストを送信できるミラーのサイト/フォーラムが見つかりません', modNotListedSubTip: 'リクエストする前にサイト/フォーラムのルールをお読みください', invalidLink: '無効なリンク', invalidLinkTip: 'ミラーが無効または安全でないリンクを返しました。', checkedMirrors: '確認したミラー:', bestAvailable: '利用可能な最適なバージョンを選択しました', requestUpdateTip: 'リクエストする前にサイト/フォーラムのルールをお読みください', noForumTip: 'このMODの更新をリクエストできるミラーのサイト/フォーラムが見つかりません。', clearCacheTip: '検証データを消去して再チェックします。' },
-        ko: { checkingVersion: '버전 확인 중...', mirrorError: '미러 오류', requestMod: '모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '다운로드', downloadWarning: '다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '업데이트 요청', labelSteam: 'Steam:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', justNow: '방금', minAgo: '분 전', steamError: '확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', clearCache: '캐시 지우기', cacheCooldown: '캐시 지우기 ({s}s)', idlePaused: '일시 정지 (유휴)', idleActive: '활성', exactTimeWarn: '미러에 시간이 없습니다.<br>정확도 불확실.', modUnavailable: '모드 사용 불가', modUnavailableTip: '미러에서 찾을 수 없습니다', modUnavailableSubTip: '이 요청을 보낼 미러 사이트/포럼을 찾을 수 없습니다', modNotListedSubTip: '요청하기 전에 사이트/포럼 규칙을 읽어주세요', invalidLink: '잘못된 링크', invalidLinkTip: '미러가 유효하지 않거나 안전하지 않은 링크를 반환했습니다.', checkedMirrors: '확인된 미러:', bestAvailable: '가장 적합한 버전을 선택했습니다', requestUpdateTip: '요청하기 전에 사이트/포럼 규칙을 읽어주세요', noForumTip: '이 모드의 업데이트를 요청할 미러 사이트/포럼을 찾을 수 없습니다.', clearCacheTip: '확인 데이터를 지우고 다시 확인합니다.' }
+        en: { checkingVersion: 'Checking Version...', mirrorError: 'Mirror Error', requestMod: 'Request Mod', modNotListed: 'Mod not listed. Click to request.', download: 'Download', downloadWarning: 'Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update', labelSteam: 'Steam:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', justNow: 'just now', minAgo: 'min ago', steamError: 'Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: 'Mirror Without Date', mirrorNoDateTip: 'Could not verify mirror version date.', clearCache: 'Clear Cache', cacheCooldown: 'Clear cache ({s}s)', idlePaused: 'Paused (Idle)', idleActive: 'Active', exactTimeWarn: 'Mirror missing time.<br>Precision uncertain.', modUnavailable: 'Mod Unavailable', modUnavailableTip: 'Not found in the mirrors', modUnavailableSubTip: 'No mirror site/forum found to submit this request', modNotListedSubTip: 'Read the site/forum rules before requesting', invalidLink: 'Invalid Link', invalidLinkTip: 'Mirror returned an invalid or unsafe link.', checkedMirrors: 'Mirrors checked:', bestAvailable: 'Best available version selected', requestUpdateTip: 'Read the site/forum rules before requesting', noForumTip: 'No mirror site/forum found to request updates for this mod.', clearCacheTip: 'Clears verification data and rechecks.', steamFallbackWarn: 'API returned no date. Using page data (Estimated).', steamTimeMismatch: 'Time discrepancy detected between API and page.' },
+        pt: { checkingVersion: 'Verificando versão...', mirrorError: 'Erro no Mirror', requestMod: 'Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: 'Baixar', downloadWarning: 'Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização', labelSteam: 'Steam:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', justNow: 'agora', minAgo: 'min atrás', steamError: 'Sem Verificar', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: 'Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', clearCache: 'Limpar Cache', cacheCooldown: 'Limpar cache ({s}s)', idlePaused: 'Pausado (Inativo)', idleActive: 'Ativo', exactTimeWarn: 'O mirror não contém hora.<br>Precisão incerta.', modUnavailable: 'Mod Indisponível', modUnavailableTip: 'Não encontrado nos mirrors', modUnavailableSubTip: 'Nenhum site/fórum dos mirrors foi encontrado<br>para fazer este pedido', modNotListedSubTip: 'Leia as regras do site/fórum antes de pedir', invalidLink: 'Link Inválido', invalidLinkTip: 'O mirror retornou um link inválido ou inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Melhor versão disponível selecionada', requestUpdateTip: 'Leia as regras do site/fórum antes de pedir', noForumTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar atualizações deste mod.', clearCacheTip: 'Limpa os dados de verificação e refaz a checagem.', steamFallbackWarn: 'A API não retornou data. Usando dados da página (Estimado).', steamTimeMismatch: 'Diferença de horário detectada entre API e página.' },
+        es: { checkingVersion: 'Comprobando versión...', mirrorError: 'Error en Mirror', requestMod: 'Pedir mod', modNotListed: 'Mod no listado. Haz clic para pedirlo.', download: 'Descargar', downloadWarning: 'Descargar', modUpdated: 'MOD ACTUALIZADO', modOutdated: 'MOD DESACTUALIZADO', requestUpdate: 'Pedir actualización', labelSteam: 'Steam:', labelCache: 'Estado del caché:', cacheSteam: 'Steam:', justNow: 'ahora', minAgo: 'min atrás', steamError: 'No verificado', steamErrorTip: 'Fallo en la API de Steam. Versión no verificada.', mirrorNoDate: 'Mirror sin fecha', mirrorNoDateTip: 'No se pudo verificar la versión del mirror.', clearCache: 'Borrar caché', cacheCooldown: 'Borrar caché ({s}s)', idlePaused: 'Pausado (Inactivo)', idleActive: 'Activo', exactTimeWarn: 'Mirror sin hora.<br>Precisión incierta.', modUnavailable: 'Mod no disponible', modUnavailableTip: 'No encontrado en los mirrors', modUnavailableSubTip: 'No se encontró ningún sitio/foro de mirrors para hacer esta solicitud', modNotListedSubTip: 'Lee las reglas del sitio/foro antes de pedir', invalidLink: 'Enlace Inválido', invalidLinkTip: 'El mirror devolvió un enlace inválido o inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Mejor versión disponible seleccionada', requestUpdateTip: 'Lee las reglas del sitio/foro antes de pedir', noForumTip: 'No se encontró ningún sitio/foro de mirrors para solicitar actualizaciones de este mod.', clearCacheTip: 'Borra los datos de verificación y vuelve a comprobar.', steamFallbackWarn: 'La API no devolvió fecha. Usando datos de página (Estimado).', steamTimeMismatch: 'Discrepancia detectada entre API y página.' },
+        fr: { checkingVersion: 'Vérification de la version...', mirrorError: 'Erreur Mirror', requestMod: 'Demander le mod', modNotListed: 'Mod non listé. Cliquez pour le demander.', download: 'Télécharger', downloadWarning: 'Télécharger', modUpdated: 'MOD À JOUR', modOutdated: 'MOD OBSOLÈTE', requestUpdate: 'Demander une mise à jour', labelSteam: 'Steam:', labelCache: 'État du cache:', cacheSteam: 'Steam:', justNow: 'à l\'instant', minAgo: 'min', steamError: 'Non vérifié', steamErrorTip: 'Erreur de l\'API Steam. Version non vérifiée.', mirrorNoDate: 'Mirror sans date', mirrorNoDateTip: 'Impossible de vérifier la version du mirror.', clearCache: 'Vider le cache', cacheCooldown: 'Vider ({s}s)', idlePaused: 'En pause (Inactif)', idleActive: 'Actif', exactTimeWarn: 'Heure manquante dans le mirror.<br>Précision incertaine.', modUnavailable: 'Mod indisponible', modUnavailableTip: 'Introuvable dans les mirrors', modUnavailableSubTip: 'Aucun site/forum de mirrors trouvé pour faire cette demande', modNotListedSubTip: 'Lisez les règles du site/forum avant de faire une demande', invalidLink: 'Lien invalide', invalidLinkTip: 'Le mirror a renvoyé un lien invalide ou non sécurisé.', checkedMirrors: 'Mirrors vérifiés:', bestAvailable: 'Meilleure version disponible sélectionnée', requestUpdateTip: 'Lisez les règles du site/forum avant de faire une demande', noForumTip: "Aucun site/forum de mirrors trouvé pour demander des mises à jour de ce mod.", clearCacheTip: 'Efface les données de vérification et relance la vérification.', steamFallbackWarn: "L'API n'a pas renvoyé de date. Données de page utilisées.", steamTimeMismatch: "Différence d'heure détectée entre l'API et la page." },
+        de: { checkingVersion: 'Version wird geprüft...', mirrorError: 'Mirror-Fehler', requestMod: 'Mod anfragen', modNotListed: 'Mod nicht gelistet. Zum Anfragen klicken.', download: 'Herunterladen', downloadWarning: 'Herunterladen', modUpdated: 'MOD AKTUELL', modOutdated: 'MOD VERALTET', requestUpdate: 'Update anfragen', labelSteam: 'Steam:', labelCache: 'Cache-Status:', cacheSteam: 'Steam:', justNow: 'gerade eben', minAgo: 'Min. her', steamError: 'Nicht verifiziert', steamErrorTip: 'Steam API nicht erreichbar. Version nicht verifiziert.', mirrorNoDate: 'Mirror ohne Datum', mirrorNoDateTip: 'Mirror-Version konnte nicht verifiziert werden.', clearCache: 'Cache leeren', cacheCooldown: 'Cache leeren ({s}s)', idlePaused: 'Pausiert (Inaktiv)', idleActive: 'Aktiv', exactTimeWarn: 'Mirror ohne Uhrzeit.<br>Präzision ungewiss.', modUnavailable: 'Mod nicht verfügbar', modUnavailableTip: 'Nicht in den Mirrors gefunden', modUnavailableSubTip: 'Keine Mirror-Seite/Forum gefunden, um diese Anfrage zu stellen', modNotListedSubTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', invalidLink: 'Ungültiger Link', invalidLinkTip: 'Der Mirror hat einen ungültigen oder unsicheren Link zurückgegeben.', checkedMirrors: 'Überprüfte Mirrors:', bestAvailable: 'Beste verfügbare Version ausgewählt', requestUpdateTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', noForumTip: 'Keine Mirror-Seite/Forum gefunden, um Updates für diesen Mod anzufragen.', clearCacheTip: 'Löscht die Überprüfungsdaten und prüft erneut.', steamFallbackWarn: 'API lieferte kein Datum. Seitendaten verwendet.', steamTimeMismatch: 'Zeitunterschied zwischen API und Seite erkannt.' },
+        it: { checkingVersion: 'Controllo versione...', mirrorError: 'Errore Mirror', requestMod: 'Richiedi mod', modNotListed: 'Mod non presente. Clicca per richiederla.', download: 'Scarica', downloadWarning: 'Scarica', modUpdated: 'MOD AGGIORNATA', modOutdated: 'MOD NON AGGIORNATA', requestUpdate: 'Richiedi aggiornamento', labelSteam: 'Steam:', labelCache: 'Stato cache:', cacheSteam: 'Steam:', justNow: 'adesso', minAgo: 'min fa', steamError: 'Non verificato', steamErrorTip: 'API Steam non raggiungibile. Versione non verificata.', mirrorNoDate: 'Mirror senza data', mirrorNoDateTip: 'Impossibile verificare la versione del mirror.', clearCache: 'Svuota cache', cacheCooldown: 'Svuota cache ({s}s)', idlePaused: 'In pausa (Inattivo)', idleActive: 'Attivo', exactTimeWarn: 'Mirror senza ora.<br>Precisione incerta.', modUnavailable: 'Mod non disponibile', modUnavailableTip: 'Non trovato nei mirror', modUnavailableSubTip: 'Nessun sito/forum di mirror trovato per effettuare questa richiesta', modNotListedSubTip: 'Leggi le regole del sito/forum prima di richiedere', invalidLink: 'Link non valido', invalidLinkTip: 'Il mirror ha restituito un link non valido o non sicuro.', checkedMirrors: 'Mirrors controllati:', bestAvailable: 'Migliore versione disponibile selezionata', requestUpdateTip: 'Leggi le regole del sito/forum prima di richiedere', noForumTip: 'Nessun sito/forum di mirror trovato per richiedere aggiornamenti di questa mod.', clearCacheTip: 'Cancella i dati di verifica e ricontrolla.', steamFallbackWarn: "L'API non ha restituito date. Dati pagina utilizzati.", steamTimeMismatch: "Discrepanza oraria tra API e pagina." },
+        nl: { checkingVersion: 'Versie controleren...', mirrorError: 'Mirrorfout', requestMod: 'Mod aanvragen', modNotListed: 'Mod staat niet in de lijst. Klik om aan te vragen.', download: 'Downloaden', downloadWarning: 'Downloaden', modUpdated: 'MOD IS UP-TO-DATE', modOutdated: 'MOD IS VEROUDERD', requestUpdate: 'Update aanvragen', labelSteam: 'Steam:', labelCache: 'Cache-status:', cacheSteam: 'Steam:', justNow: 'zojuist', minAgo: 'min geleden', steamError: 'Ongecontroleerd', steamErrorTip: 'Steam API onbereikbaar. Versie niet gecontroleerd.', mirrorNoDate: 'Mirror zonder datum', mirrorNoDateTip: 'Kon de mirrorversie niet verifiëren.', clearCache: 'Cache wissen', cacheCooldown: 'Cache wissen ({s}s)', idlePaused: 'Gepauzeerd (Inactief)', idleActive: 'Actief', exactTimeWarn: 'Mirror mist tijd.<br>Precisie onzeker.', modUnavailable: 'Mod niet beschikbaar', modUnavailableTip: 'Niet gevonden in de mirrors', modUnavailableSubTip: 'Geen mirror-site/forum gevonden om deze aanvraag te doen', modNotListedSubTip: 'Lees de regels van de site/het forum voordat je een aanvraag doet', invalidLink: 'Ongeldige link', invalidLinkTip: 'De mirror gaf een ongeldige of onveilige link terug.', checkedMirrors: 'Gecontroleerde mirrors:', bestAvailable: 'Beste beschikbare versie geselecteerd', requestUpdateTip: 'Lees de regels van de site/het forum voordat je een aanvraag doet', noForumTip: 'Geen mirror-site/forum gevonden om updates voor deze mod aan te vragen.', clearCacheTip: 'Wist de verificatiegegevens en controleert opnieuw.', steamFallbackWarn: 'API gaf geen datum op. Pagina-gegevens gebruikt.', steamTimeMismatch: 'Tijdsverschil tussen API en pagina.' },
+        pl: { checkingVersion: 'Sprawdzanie wersji...', mirrorError: 'Błąd Mirrora', requestMod: 'Poproś o mod', modNotListed: 'Mod nie jest na liście. Kliknij, aby poprosić.', download: 'Pobierz', downloadWarning: 'Pobierz', modUpdated: 'MOD AKTUALNY', modOutdated: 'MOD NIEAKTUALNY', requestUpdate: 'Poproś o aktualizację', labelSteam: 'Steam:', labelCache: 'Stan pamięci podręcznej:', cacheSteam: 'Steam:', justNow: 'właśnie teraz', minAgo: 'min temu', steamError: 'Niezweryfikowane', steamErrorTip: 'API Steam niedostępne. Wersja niezweryfikowana.', mirrorNoDate: 'Mirror bez daty', mirrorNoDateTip: 'Nie można zweryfikować wersji mirrora.', clearCache: 'Wyczyść pamięć', cacheCooldown: 'Wyczyść pamięć ({s}s)', idlePaused: 'Wstrzymano (Bezczynny)', idleActive: 'Aktywny', exactTimeWarn: 'Brak godziny w mirrorze.<br>Precyzja niepewna.', modUnavailable: 'Mod niedostępny', modUnavailableTip: 'Nie znaleziono w mirrorach', modUnavailableSubTip: 'Nie znaleziono strony/forum mirrora do złożenia tej prośby', modNotListedSubTip: 'Przeczytaj zasady strony/forum przed złożeniem prośby', invalidLink: 'Nieprawidłowy link', invalidLinkTip: 'Mirror zwrócił nieprawidłowy lub niebezpieczny link.', checkedMirrors: 'Sprawdzone mirrory:', bestAvailable: 'Wybrano najlepszą dostępną wersję', requestUpdateTip: 'Przeczytaj zasady strony/forum przed złożeniem prośby', noForumTip: 'Nie znaleziono strony/forum mirrora do proszenia o aktualizacje tego moda.', clearCacheTip: 'Czyści dane weryfikacji i sprawdza ponownie.', steamFallbackWarn: 'API nie podało daty. Użyto danych ze strony.', steamTimeMismatch: 'Różnica czasu między API a stroną.' },
+        ru: { checkingVersion: 'Проверка версии...', mirrorError: 'Ошибка зеркала', requestMod: 'Запросить мод', modNotListed: 'Мода нет в списке. Нажмите, чтобы запросить.', download: 'Скачать', downloadWarning: 'Скачать', modUpdated: 'МОД АКТУАЛЕН', modOutdated: 'МОД УСТАРЕЛ', requestUpdate: 'Запросить обновление', labelSteam: 'Steam:', labelCache: 'Статус кэша:', cacheSteam: 'Steam:', justNow: 'только что', minAgo: 'мин назад', steamError: 'Не проверено', steamErrorTip: 'API Steam недоступен. Версия не проверена.', mirrorNoDate: 'Зеркало без даты', mirrorNoDateTip: 'Не удалось проверить версию зеркала.', clearCache: 'Очистить кэш', cacheCooldown: 'Очистить кэш ({s}s)', idlePaused: 'Пауза (Бездействие)', idleActive: 'Активно', exactTimeWarn: 'На зеркале нет времени.<br>Точность не гарантируется.', modUnavailable: 'Мод недоступен', modUnavailableTip: 'Не найдено на зеркалах', modUnavailableSubTip: 'Сайт/форум зеркала для этого запроса не найден', modNotListedSubTip: 'Прочитайте правила сайта/форума перед запросом', invalidLink: 'Неверная ссылка', invalidLinkTip: 'Зеркало вернуло неверную или небезопасную ссылку.', checkedMirrors: 'Проверенные зеркала:', bestAvailable: 'Выбрана лучшая доступная версия', requestUpdateTip: 'Прочитайте правила сайта/форума перед запросом', noForumTip: 'Не найден сайт/форум зеркала для запроса обновлений этого мода.', clearCacheTip: 'Очищает данные проверки и выполняет проверку заново.', steamFallbackWarn: 'API не вернуло дату. Используются данные страницы.', steamTimeMismatch: 'Разница во времени между API и страницей.' },
+        tr: { checkingVersion: 'Sürüm kontrol ediliyor...', mirrorError: 'Mirror hatası', requestMod: 'Mod iste', modNotListed: 'Mod listede yok. İstemek için tıkla.', download: 'İndir', downloadWarning: 'İndir', modUpdated: 'MOD GÜNCEL', modOutdated: 'MOD ESKİ', requestUpdate: 'Güncelleme iste', labelSteam: 'Steam:', labelCache: 'Önbellek Durumu:', cacheSteam: 'Steam:', justNow: 'şimdi', minAgo: 'dk önce', steamError: 'Doğrulanmadı', steamErrorTip: 'Steam API\'sine ulaşılamıyor. Sürüm doğrulanmadı.', mirrorNoDate: 'Tarihsiz Mirror', mirrorNoDateTip: 'Mirror sürümü doğrulanamadı.', clearCache: 'Önbelleği Temizle', cacheCooldown: 'Önbelleği temizle ({s}s)', idlePaused: 'Duraklatıldı (Boşta)', idleActive: 'Aktif', exactTimeWarn: 'Mirror\'da saat yok.<br>Kesinlik belirsiz.', modUnavailable: 'Mod mevcut değil', modUnavailableTip: 'Mirror\'larda bulunamadı', modUnavailableSubTip: 'Bu isteği yapmak için mirror sitesi/forumu bulunamadı', modNotListedSubTip: 'İstemeden önce site/forum kurallarını okuyun', invalidLink: 'Geçersiz Bağlantı', invalidLinkTip: 'Mirror geçersiz veya güvensiz bir bağlantı döndürdü.', checkedMirrors: 'Kontrol edilen mirror\'lar:', bestAvailable: 'Mevcut en iyi sürüm seçildi', requestUpdateTip: 'İstemeden önce site/forum kurallarını okuyun', noForumTip: 'Bu mod için güncelleme istemek üzere mirror sitesi/forumu bulunamadı.', clearCacheTip: 'Doğrulama verilerini temizler ve yeniden kontrol eder.', steamFallbackWarn: 'API tarih vermedi. Sayfa verileri kullanılıyor.', steamTimeMismatch: 'API ve sayfa arasında saat farkı tespit edildi.' },
+        zh: { checkingVersion: '正在检查版本...', mirrorError: '镜像错误', requestMod: '请求 Mod', modNotListed: 'Mod 未收录。点击请求。', download: '下载', downloadWarning: '下载', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已过期', requestUpdate: '请求更新', labelSteam: 'Steam:', labelCache: '缓存状态:', cacheSteam: 'Steam:', justNow: '刚刚', minAgo: '分钟前', steamError: '未验证', steamErrorTip: 'Steam API 无法访问。版本未验证。', mirrorNoDate: '镜像无日期', mirrorNoDateTip: '无法验证镜像版本。', clearCache: '清除缓存', cacheCooldown: '清除缓存 ({s}s)', idlePaused: '已暂停（空闲）', idleActive: '活跃', exactTimeWarn: '镜像缺少时间。<br>精度不确定。', modUnavailable: '模组不可用', modUnavailableTip: '镜像中未找到', modUnavailableSubTip: '未找到可用于提交此请求的镜像网站/论坛', modNotListedSubTip: '请求前请阅读网站/论坛规则', invalidLink: '链接无效', invalidLinkTip: '镜像返回了无效或不安全的链接。', checkedMirrors: '已检查的镜像:', bestAvailable: '已选择最佳可用版本', requestUpdateTip: '请求前请阅读网站/论坛规则', noForumTip: '未找到可用于请求此模组更新的镜像网站/论坛。', clearCacheTip: '清除验证数据并重新检查。', steamFallbackWarn: 'API 未返回日期。使用页面数据。', steamTimeMismatch: '检测到 API 与页面之间存在时间差异。' },
+        zh_tw: { checkingVersion: '正在檢查版本...', mirrorError: '鏡像錯誤', requestMod: '請求 Mod', modNotListed: 'Mod 未收錄。點擊請求。', download: '下載', downloadWarning: '下載', modUpdated: 'MOD 已是最新', modOutdated: 'MOD 已過期', requestUpdate: '請求更新', labelSteam: 'Steam:', labelCache: '快取狀態:', cacheSteam: 'Steam:', justNow: '剛剛', minAgo: '分鐘前', steamError: '未驗證', steamErrorTip: 'Steam API 無法訪問。版本未驗證。', mirrorNoDate: '鏡像無日期', mirrorNoDateTip: '無法驗證鏡像版本。', clearCache: '清除快取', cacheCooldown: '清除快取 ({s}s)', idlePaused: '已暫停（閒置）', idleActive: '活躍', exactTimeWarn: '鏡像缺少時間。<br>精度不確定。', modUnavailable: '模組不可用', modUnavailableTip: '鏡像中未找到', modUnavailableSubTip: '未找到可用於提交此請求的鏡像網站/論壇', modNotListedSubTip: '請求前請閱讀網站/論壇規則', invalidLink: '連結無效', invalidLinkTip: '鏡像返回了無效或不安全的連結。', checkedMirrors: '已檢查的鏡像:', bestAvailable: '已選擇最佳可用版本', requestUpdateTip: '請求前請閱讀網站/論壇規則', noForumTip: '未找到可用於請求此模組更新的鏡像網站/論壇。', clearCacheTip: '清除驗證資料並重新檢查。', steamFallbackWarn: 'API 未返回日期。使用頁面數據。', steamTimeMismatch: '檢測到 API 與頁面之間存在時間差異。' },
+        ja: { checkingVersion: 'バージョン確認中...', mirrorError: 'ミラーエラー', requestMod: 'Modをリクエスト', modNotListed: 'Modが未登録です。クリックしてリクエスト。', download: 'ダウンロード', downloadWarning: 'ダウンロード', modUpdated: 'MODは最新です', modOutdated: 'MODは古いです', requestUpdate: '更新をリクエスト', labelSteam: 'Steam:', labelCache: 'キャッシュ状態:', cacheSteam: 'Steam:', justNow: 'たった今', minAgo: '分前', steamError: '未検証', steamErrorTip: 'Steam APIにアクセスできません。バージョン未検証。', mirrorNoDate: '日付のないミラー', mirrorNoDateTip: 'ミラーのバージョンを確認できませんでした。', clearCache: 'キャッシュを消去', cacheCooldown: 'キャッシュ消去 ({s}s)', idlePaused: '一時停止（アイドル）', idleActive: 'アクティブ', exactTimeWarn: 'ミラーに時間がありません。<br>精度は不確実です。', modUnavailable: 'Mod利用不可', modUnavailableTip: 'ミラーに見つかりません', modUnavailableSubTip: 'このリクエストを送信できるミラーのサイト/フォーラムが見つかりません', modNotListedSubTip: 'リクエストする前にサイト/フォーラムのルールをお読みください', invalidLink: '無効なリンク', invalidLinkTip: 'ミラーが無効または安全でないリンクを返しました。', checkedMirrors: '確認したミラー:', bestAvailable: '利用可能な最適なバージョンを選択しました', requestUpdateTip: 'リクエストする前にサイト/フォーラムのルールをお読みください', noForumTip: 'このMODの更新をリクエストできるミラーのサイト/フォーラムが見つかりません。', clearCacheTip: '検証データを消去して再チェックします。', steamFallbackWarn: 'APIが日付を返しませんでした。ページデータを使用。', steamTimeMismatch: 'APIとページの間で時間の不一致が検出されました。' },
+        ko: { checkingVersion: '버전 확인 중...', mirrorError: '미러 오류', requestMod: '모드 요청', modNotListed: '모드가 목록에 없습니다. 클릭해서 요청하세요.', download: '다운로드', downloadWarning: '다운로드', modUpdated: 'MOD 최신 상태', modOutdated: 'MOD 오래됨', requestUpdate: '업데이트 요청', labelSteam: 'Steam:', labelCache: '캐시 상태:', cacheSteam: 'Steam:', justNow: '방금', minAgo: '분 전', steamError: '확인 안 됨', steamErrorTip: 'Steam API에 접근할 수 없습니다. 버전이 확인되지 않았습니다.', mirrorNoDate: '날짜 없는 미러', mirrorNoDateTip: '미러 버전을 확인할 수 없습니다.', clearCache: '캐시 지우기', cacheCooldown: '캐시 지우기 ({s}s)', idlePaused: '일시 정지 (유휴)', idleActive: '활성', exactTimeWarn: '미러에 시간이 없습니다.<br>정확도 불확실.', modUnavailable: '모드 사용 불가', modUnavailableTip: '미러에서 찾을 수 없습니다', modUnavailableSubTip: '이 요청을 보낼 미러 사이트/포럼을 찾을 수 없습니다', modNotListedSubTip: '요청하기 전에 사이트/포럼 규칙을 읽어주세요', invalidLink: '잘못된 링크', invalidLinkTip: '미러가 유효하지 않거나 안전하지 않은 링크를 반환했습니다.', checkedMirrors: '확인된 미러:', bestAvailable: '가장 적합한 버전을 선택했습니다', requestUpdateTip: '요청하기 전에 사이트/포럼 규칙을 읽어주세요', noForumTip: '이 모드의 업데이트를 요청할 미러 사이트/포럼을 찾을 수 없습니다.', clearCacheTip: '확인 데이터를 지우고 다시 확인합니다.', steamFallbackWarn: 'API가 날짜를 반환하지 않았습니다. 페이지 데이터 사용.', steamTimeMismatch: 'API와 페이지 간의 시간 차이가 감지되었습니다.' }
     };
 
     const languageAliases = {
@@ -849,14 +984,14 @@
             /**
              * config esperado:
              * {
-             * text: string,           // Texto principal
-             * icon: string,           // Emoji ou ícone a ser renderizado antes do texto
-             * link: string|null,      // URL de destino
-             * stateClass: string,     // 'swdd-state-success', 'swdd-state-warning', etc
-             * disabled: boolean,      // Define se o botão principal é clicável
-             * timerExp: number,       // Timestamp (Date.now() + ms) para bloqueio temporário
-             * tooltip: string,        // Dica exibida no painel escuro customizado ou nativo
-             * dropdown: Array         // Lista de ações no menu suspenso
+             * text: string,            // Texto principal
+             * icon: string,            // Emoji ou ícone a ser renderizado antes do texto
+             * link: string|null,       // URL de destino
+             * stateClass: string,      // 'swdd-state-success', 'swdd-state-warning', etc
+             * disabled: boolean,       // Define se o botão principal é clicável
+             * timerExp: number,        // Timestamp (Date.now() + ms) para bloqueio temporário
+             * tooltip: string,         // Dica exibida no painel escuro customizado ou nativo
+             * dropdown: Array          // Lista de ações no menu suspenso
              * }
              */
             const cClass = isCard ? 'swdd-custom-btn-compact' : '';
@@ -1035,14 +1170,14 @@
              * showMirrorCheck: boolean,  // Exibe "Mirrors verificados". Default: true
              * showCache: boolean         // Exibe o bloco "Status do Cache". Default: true
              * showBestAvailable: boolean // Exibe "Melhor versão disponível selecionada" dentro
-             *                             // do bloco de mirrors verificados. Default: true.
-             *                             // Usar false quando NADA foi encontrado/selecionado
-             *                             // (senão a frase contradiz o título de erro).
+             *                            // do bloco de mirrors verificados. Default: true.
+             *                            // Usar false quando NADA foi encontrado/selecionado
+             *                            // (senão a frase contradiz o título de erro).
              * }
              */
             const titleHtml = `<div class="swdd-tooltip-title swdd-tooltip-${config.stateClass}"><span>${config.icon}</span> ${escapeHTML(config.titleText)}</div>`;
             const bodyHtml = config.bodyHtml || '';
-
+            
             // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
@@ -1188,7 +1323,6 @@
 
                 steamDateCache = {};
                 localSteamCache = {};
-
                 pendingSteamIDs.clear();
                 steamCallbacks.clear();
 
@@ -1299,7 +1433,7 @@
                 const rawText = link.getAttribute('data-swdd-tooltip') || '';
                 const isWarnTip = link.hasAttribute('data-swdd-tooltip-warn');
                 const tooltipColor = isWarnTip ? '#F59E0B' : 'inherit';
-
+                
                 // =======================================================
                 // CONFIGURAÇÃO AUTOMÁTICA DO TAMANHO DA CAIXA
                 const maxChars = 50; // <- Escolha aqui o limite de letras
@@ -1332,7 +1466,6 @@
 
                 // O CSS usa a variável ${dynamicMaxWidth}px que cresce ou encolhe sozinha
                 const tooltipHtml = `<div class="swdd-tooltip-row" style="display: inline-block; width: max-content; max-width: ${dynamicMaxWidth}px; line-height: 1.4; color: ${tooltipColor}; white-space: normal !important;">${formattedText}</div>`;
-
                 bindTooltip(link, tooltipHtml);
             });
 
@@ -1567,6 +1700,7 @@
 
     // ========================================================================
     // MÓDULO 6: API CONTROLLERS (Gerenciamento Lógico de Consultas Steam e Mirrors)
+    // Hierarquia Rigorosa: API -> SSR -> HTML
     // ========================================================================
     let steamDateCache  = {};
     let localSteamCache = {};
@@ -1626,7 +1760,6 @@
 
         // Empacota até 100 IDs em uma mesma requisição POST
         const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
-
         const formData = new URLSearchParams();
         formData.append('itemcount', idsToFetch.length.toString());
         idsToFetch.forEach((id, index) => formData.append(`publishedfileids[${index}]`, id));
@@ -1665,7 +1798,10 @@
                     localSteamCache[id] = { date: STEAM_NO_DATE, exp: now + CACHE_TIME_STEAM_MS };
                 }
                 pendingSteamIDs.delete(id);
-                // Libera todas as Promises na fila
+            });
+
+            // Libera todas as Promises na fila
+            idsToFetch.forEach(id => {
                 if (steamCallbacks.has(id)) { steamCallbacks.get(id).forEach(cb => cb()); steamCallbacks.delete(id); }
             });
 
@@ -1680,25 +1816,74 @@
     /**
      * Requisita, de forma assíncrona segura, a última atualização de um ID na API da Steam.
      */
-    function getSteamDateAsync(modId) {
-        return new Promise(resolve => {
-            if (localSteamCache[modId] && Date.now() >= localSteamCache[modId].exp) {
-                delete steamDateCache[modId];
+    async function getSteamDateAsync(modId) {
+        const now = Date.now();
+
+        if (localSteamCache[modId] && now >= localSteamCache[modId].exp) {
+            delete steamDateCache[modId];
+        }
+
+        let cached = localSteamCache[modId];
+        if (cached && now < cached.exp) {
+            let dateSteam = (cached.date === STEAM_NO_DATE || cached.date === STEAM_FETCH_ERROR) ? cached.date : new Date(cached.date);
+            if (dateSteam instanceof Date) {
+                dateSteam.isFallback = cached.isFallback || false;
+                dateSteam.hasTimeMismatch = cached.hasTimeMismatch || false;
             }
+            steamDateCache[modId] = dateSteam;
+            return dateSteam;
+        }
 
-            let dateSteam = steamDateCache[modId];
-            if (dateSteam === undefined && localSteamCache[modId] && Date.now() < localSteamCache[modId].exp) {
-                const cachedVal = localSteamCache[modId].date;
-                dateSteam = steamDateCache[modId] = (cachedVal === STEAM_NO_DATE || cachedVal === STEAM_FETCH_ERROR) ? cachedVal : new Date(cachedVal);
-            }
-
-            if (dateSteam !== undefined) return resolve(dateSteam);
-
+        // 1. PRIORIDADE MÁXIMA: TENTA A API OFICIAL
+        const apiResult = await new Promise(resolve => {
             pendingSteamIDs.add(modId);
             if (!steamCallbacks.has(modId)) steamCallbacks.set(modId, new Set());
             steamCallbacks.get(modId).add(() => resolve(steamDateCache[modId]));
             triggerSteamFetch();
         });
+
+        const isCurrentPage = new URLSearchParams(window.location.search).get('id') === modId;
+        let finalDate = apiResult;
+        let mismatch = false;
+        let fallback = false;
+
+        // 2. SE A API FALHOU (N/A OU ERRO), TENTA OS DADOS DA PÁGINA (SSR ou HTML)
+        if (!(apiResult instanceof Date) || apiResult === STEAM_NO_DATE) {
+            const ssrData = utils.getSteamSSRData();
+            if (ssrData && ssrData[modId]) { 
+                finalDate = ssrData[modId]; 
+                fallback = true; 
+            } else if (isCurrentPage) {
+                const htmlDate = utils.parseSteamHTMLDate();
+                if (htmlDate) { 
+                    finalDate = htmlDate.date; 
+                    fallback = true; 
+                }
+            }
+        } 
+        // 3. SE A API FUNCIONOU, VERIFICA SE O HORÁRIO DO SITE É DIFERENTE (DETECTOR DE CONFLITOS/CACHE DA VALVE)
+        else if (apiResult instanceof Date && isCurrentPage) {
+            const htmlDate = utils.parseSteamHTMLDate();
+            // Diferença maior que 5 minutos ativa o alerta de imprecisão
+            if (htmlDate && Math.abs(htmlDate.date.getTime() - apiResult.getTime()) > 300000) {
+                mismatch = true;
+            }
+        }
+
+        if (finalDate instanceof Date) {
+            finalDate.isFallback = fallback;
+            finalDate.hasTimeMismatch = mismatch;
+            steamDateCache[modId] = finalDate; 
+            localSteamCache[modId] = { 
+                date: finalDate.toISOString(), 
+                exp: Date.now() + CACHE_TIME_STEAM_MS, 
+                isFallback: fallback, 
+                hasTimeMismatch: mismatch 
+            };
+            saveSteamCache();
+        }
+
+        return finalDate;
     }
 
     const memoryMirrorCache = {};
@@ -1902,7 +2087,6 @@
             });
 
             container.dataset.activeMirrorIds = JSON.stringify(consultedMirrors.map(m => m.id));
-
             container.innerHTML = TemplateEngine.createModularButton(isCard, btnConfig);
 
             bindTooltip(container.firstElementChild, tooltipHtmlStr);
@@ -1923,7 +2107,7 @@
         // Verifica protocolo HTTP/HTTPS rigorosamente para mitigar injeções perigosas em URL (ex: javascript:alert(1))
         let safeLink = '#';
         try { if (modData.link) { const parsedUrl = new URL(modData.link); if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') safeLink = parsedUrl.href; } } catch(e) {}
-
+        
         // O mirror retornou um campo "link" (não veio vazio/ausente), mas ele não sobreviveu
         // à validação de protocolo acima (ex: "javascript:...", URL malformada). Sem isso,
         // o botão ficava com aparência de sucesso normal e, ao clicar, abria uma aba em
@@ -1932,11 +2116,20 @@
         const linkInvalid = !!modData.link && safeLink === '#';
 
         let exactTimeWarningHtml = '';
+        
+        // NOVO: Adiciona avisos de Fallback ou Divergência da API
+        if (dateSteam && dateSteam.isFallback) {
+            exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">ℹ️ ${t.steamFallbackWarn}</div>`;
+        }
+        if (dateSteam && dateSteam.hasTimeMismatch) {
+            exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">⚠️ ${t.steamTimeMismatch}</div>`;
+        }
+
         if (!exactTime && dateMirror && dateSteam && dateSteam !== STEAM_NO_DATE && dateSteam !== STEAM_FETCH_ERROR) {
             // Se o dia coincidir (mesmo sem hora exata para comparar), solta o alerta amarelo
             const isSameDay = dateMirror.getFullYear() === dateSteam.getFullYear() && dateMirror.getMonth() === dateSteam.getMonth() && dateMirror.getDate() === dateSteam.getDate();
             if (isSameDay) {
-                exactTimeWarningHtml = `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">⚠️ ${t.exactTimeWarn}</div>`;
+                exactTimeWarningHtml += `<div style="color: #F59E0B; font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #3d4450; white-space: normal !important; line-height: 1.4;">⚠️ ${t.exactTimeWarn}</div>`;
             }
         }
 
@@ -1967,9 +2160,7 @@
                     condition: isOutdated,
                     // Fórum bloqueado caso as configurações do jogo não definam uma URL
                     disabled: !GAME.forumUrl,
-                    tooltip: GAME.forumUrl
-                        ? t.requestUpdateTip
-                        : t.noForumTip,
+                    tooltip: GAME.forumUrl ? t.requestUpdateTip : t.noForumTip,
                     // Sinaliza que esse tooltip é o aviso de "leia as regras" (amarelo),
                     // e não o erro neutro de "nenhum fórum cadastrado".
                     tooltipWarn: !!GAME.forumUrl
