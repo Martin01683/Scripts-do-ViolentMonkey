@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.06
+// @version      26.06.22.07
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1296,10 +1296,43 @@
 
             // Vincula dinamicamente a apresentação visual do painel flutuante aos menus suspensos
             dropdownGlobal.querySelectorAll('a[data-swdd-tooltip]').forEach(link => {
-                const tooltipText = link.getAttribute('data-swdd-tooltip');
+                const rawText = link.getAttribute('data-swdd-tooltip') || '';
                 const isWarnTip = link.hasAttribute('data-swdd-tooltip-warn');
                 const tooltipColor = isWarnTip ? '#F59E0B' : 'inherit';
-                const tooltipHtml = `<div class="swdd-tooltip-row" style="display: inline-block; white-space: normal !important; max-width: 260px; line-height: 1.4; color: ${tooltipColor};">${escapeHTML(tooltipText)}</div>`;
+
+                // =======================================================
+                // CONFIGURAÇÃO AUTOMÁTICA DO TAMANHO DA CAIXA
+                const maxChars = 50; // <--- Escolha aqui o limite de letras
+                // =======================================================
+
+                // Calcula o max-width do CSS dinamicamente (cada letra tem ~7.5px)
+                const dynamicMaxWidth = Math.ceil(maxChars * 7.5);
+
+                let formattedText = '';
+
+                if (rawText.length > maxChars && rawText.includes(' ')) {
+                    const words = rawText.split(' ');
+                    let currentLine = '';
+                    const lines = [];
+
+                    for (const word of words) {
+                        if (currentLine.length + word.length > maxChars && currentLine.length > 0) {
+                            lines.push(escapeHTML(currentLine.trim()));
+                            currentLine = word + ' ';
+                        } else {
+                            currentLine += word + ' ';
+                        }
+                    }
+                    if (currentLine.trim()) lines.push(escapeHTML(currentLine.trim()));
+                    formattedText = lines.join('<br>');
+                } else {
+                    // Textos curtos ou idiomas sem espaço
+                    formattedText = escapeHTML(rawText);
+                }
+
+                // O CSS agora usa a variável ${dynamicMaxWidth}px que cresce ou encolhe sozinha
+                const tooltipHtml = `<div class="swdd-tooltip-row" style="display: inline-block; width: max-content; max-width: ${dynamicMaxWidth}px; line-height: 1.4; color: ${tooltipColor}; white-space: normal !important;">${formattedText}</div>`;
+
                 bindTooltip(link, tooltipHtml);
             });
 
