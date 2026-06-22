@@ -1302,7 +1302,7 @@
 
                 // =======================================================
                 // CONFIGURAÇÃO AUTOMÁTICA DO TAMANHO DA CAIXA
-                const maxChars = 50; // <--- Escolha aqui o limite de letras
+                const maxChars = 50; // <- Escolha aqui o limite de letras
                 // =======================================================
 
                 // Calcula o max-width do CSS dinamicamente (cada letra tem ~7.5px)
@@ -1330,7 +1330,7 @@
                     formattedText = escapeHTML(rawText);
                 }
 
-                // O CSS agora usa a variável ${dynamicMaxWidth}px que cresce ou encolhe sozinha
+                // O CSS usa a variável ${dynamicMaxWidth}px que cresce ou encolhe sozinha
                 const tooltipHtml = `<div class="swdd-tooltip-row" style="display: inline-block; width: max-content; max-width: ${dynamicMaxWidth}px; line-height: 1.4; color: ${tooltipColor}; white-space: normal !important;">${formattedText}</div>`;
 
                 bindTooltip(link, tooltipHtml);
