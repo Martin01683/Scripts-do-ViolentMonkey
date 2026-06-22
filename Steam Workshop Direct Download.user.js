@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.50
+// @version      26.06.22.51
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1183,11 +1183,14 @@
              */
             const titleHtml = `<div class="swdd-tooltip-title swdd-tooltip-${config.stateClass}"><span>${config.icon}</span> ${escapeHTML(config.titleText)}</div>`;
             const bodyHtml = config.bodyHtml || '';
-            
-            // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
+
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
-            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, !!bodyHtml) : '';
+            // Se bodyHtml já termina com um swdd-notice (que tem border-top dashed próprio +
+            // margin + padding), não adicionamos mais uma borda sólida — evita o espaçamento
+            // duplo que criava um gap visualmente grande entre o aviso e "Mirrors verificados:".
+            const endsWithNotice = bodyHtml.includes('swdd-notice');
+            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, !!bodyHtml && !endsWithNotice) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
             return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
@@ -1210,10 +1213,34 @@
         createNotice(type, message) {
             const icons = { info: 'ℹ️', warning: '⚠️', error: '🚫' };
             const icon = icons[type] || icons.info;
-            // Normaliza quebras de linha: divide em <br> (variantes) e \n, escapa cada segmento e reune
+            // =======================================================
+            // CONFIGURAÇÃO AUTOMÁTICA DO TAMANHO DA CAIXA
+            const maxChars = 50; // <- Escolha aqui o limite de letras
+            // =======================================================
+            // Normaliza quebras de linha explícitas (\n, <br>) e aplica o mesmo
+            // algoritmo de quebra automática por palavra usado nos tooltips do dropdown,
+            // evitando que o CSS quebre em posição arbitrária e deixe espaço em branco.
             const safeHtml = String(message)
                 .split(/<br\s*\/?>|\n/i)
-                .map(line => escapeHTML(line))
+                .map(line => {
+                    const raw = line.trim();
+                    if (raw.length > maxChars && raw.includes(' ')) {
+                        const words = raw.split(' ');
+                        let currentLine = '';
+                        const lines = [];
+                        for (const word of words) {
+                            if (currentLine.length + word.length > maxChars && currentLine.length > 0) {
+                                lines.push(escapeHTML(currentLine.trim()));
+                                currentLine = word + ' ';
+                            } else {
+                                currentLine += word + ' ';
+                            }
+                        }
+                        if (currentLine.trim()) lines.push(escapeHTML(currentLine.trim()));
+                        return lines.join('<br>');
+                    }
+                    return escapeHTML(raw);
+                })
                 .join('<br>');
             return `<div class="swdd-notice swdd-notice-${escapeHTML(type)}">` +
                    `<span class="swdd-notice-icon">${icon}</span>` +
