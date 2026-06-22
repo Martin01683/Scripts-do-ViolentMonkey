@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.52
+// @version      26.06.22.53
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1057,7 +1057,7 @@
             return gridHtml + exactTimeWarnHtml;
         },
 
-        createMirrorCheckNotice(consultedMirrors, showBestAvailable = true, needsTopSeparator = true, compactSeparator = false) {
+        createMirrorCheckNotice(consultedMirrors, showBestAvailable = true, needsTopSeparator = true) {
             // Se nenhum mirror foi consultado, não exibe nada
             if (!consultedMirrors || consultedMirrors.length === 0) return '';
 
@@ -1106,13 +1106,8 @@
             // "Mod Indisponível"), a própria borda inferior do título (.swdd-tooltip-title)
             // já serve de separador — adicionar outra aqui geraria duas linhas bem próximas
             // uma da outra. Só desenhamos a borda quando há conteúdo (bodyHtml) antes dela.
-            // Modo compacto: vem logo após um swdd-notice que já tem border-top dashed +
-            // margin/padding próprios — mantemos a borda sólida para separar visualmente,
-            // mas reduzimos o margin-top para evitar o gap duplo visível no tooltip.
             const separatorStyle = needsTopSeparator
-                ? compactSeparator
-                    ? 'margin-top: 2px; border-top: 1px solid #3d4450; padding-top: 6px;'
-                    : 'margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;'
+                ? 'margin-top: 8px; border-top: 1px solid #3d4450; padding-top: 6px;'
                 : 'margin-top: 0;';
 
             return `
@@ -1189,13 +1184,10 @@
             const titleHtml = `<div class="swdd-tooltip-title swdd-tooltip-${config.stateClass}"><span>${config.icon}</span> ${escapeHTML(config.titleText)}</div>`;
             const bodyHtml = config.bodyHtml || '';
 
+            // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
-            // compactSeparator: quando bodyHtml já termina com um swdd-notice (que tem border-top
-            // dashed + margin + padding próprios), a borda dos mirrors é mantida mas o margin-top
-            // é reduzido — evita o gap duplo sem suprimir a separação visual entre as seções.
-            const endsWithNotice = bodyHtml.includes('swdd-notice');
-            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, !!bodyHtml, endsWithNotice) : '';
+            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, !!bodyHtml) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
             return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
