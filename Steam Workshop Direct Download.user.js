@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.21.10
+// @version      26.06.22.02
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1300,7 +1300,7 @@
                 const tooltipText = link.getAttribute('data-swdd-tooltip');
                 const isWarnTip = link.hasAttribute('data-swdd-tooltip-warn');
                 const tooltipColor = isWarnTip ? '#F59E0B' : 'inherit';
-                const tooltipHtml = `<div class="swdd-tooltip-row" style="white-space: normal !important; max-width: 220px; line-height: 1.4; color: ${tooltipColor};">${escapeHTML(tooltipText)}</div>`;
+                const tooltipHtml = `<div class="swdd-tooltip-row" style="display: inline-block; white-space: normal; max-width: 600px; line-height: 1.4; color: ${tooltipColor};">${escapeHTML(tooltipText)}</div>`;
                 bindTooltip(link, tooltipHtml);
             });
 
