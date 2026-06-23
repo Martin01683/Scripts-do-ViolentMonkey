@@ -1232,11 +1232,12 @@
             // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
-            // Exceção: se o bodyHtml terminar com um notice (.swdd-notice), este já possui
+            // Exceção: se o bodyHtml começar com um notice (.swdd-notice), este já possui
             // sua própria border-top (dashed) via CSS, então adicionar outra borda sólida
             // logo abaixo geraria dois separadores consecutivos — visualmente redundante.
-            const bodyEndsWithNotice = bodyHtml && /swdd-notice[^>]*>\s*$/.test(bodyHtml.replace(/\s+$/,''));
-            const needsTopSep = !!bodyHtml && !bodyEndsWithNotice;
+            // Quando o body começa com um grid de datas (createTooltipGrid), o separador é necessário.
+            const bodyIsOnlyNotices = bodyHtml && /^\s*<div class="swdd-notice/.test(bodyHtml);
+            const needsTopSep = !!bodyHtml && !bodyIsOnlyNotices;
             const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, needsTopSep) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
