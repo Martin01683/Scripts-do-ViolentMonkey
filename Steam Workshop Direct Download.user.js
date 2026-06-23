@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.23.02
+// @version      26.06.23.03
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -228,7 +228,7 @@
                 
                 // Tabela universal de conversão de Meses para numérico (0-11)
                 const monthMap = {
-                    jan:0,janeiro:0,enero:0,янв:0,
+                    jan:0,janeiro:0,enero:0,ene:0,янв:0,
                     feb:1,fev:1,fevereiro:1,febrero:1,фев:1,
                     mar:2,março:2,marzo:2,мар:2,
                     apr:3,abr:3,abril:3,avr:3,апр:3,
@@ -239,7 +239,7 @@
                     sep:8,set:8,setembro:8,septiembre:8,sept:8,сен:8,
                     oct:9,out:9,outubro:9,octubre:9,okt:9,окт:9,
                     nov:10,novembro:10,noviembre:10,ноя:10,
-                    dec:11,dez:11,dezembro:11,diciembre:11,déc:11,дек:11
+                    dec:11,dez:11,dezembro:11,diciembre:11,dic:11,déc:11,дек:11
                 };
 
                 const parts = cleanStr.split(' ');
