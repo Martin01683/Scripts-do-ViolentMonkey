@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.54
+// @version      26.06.23.01
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1232,12 +1232,10 @@
             // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
-            // Exceção: se o bodyHtml começar com um notice (.swdd-notice), este já possui
-            // sua própria border-top (dashed) via CSS, então adicionar outra borda sólida
-            // logo abaixo geraria dois separadores consecutivos — visualmente redundante.
-            // Quando o body começa com um grid de datas (createTooltipGrid), o separador é necessário.
-            const bodyIsOnlyNotices = bodyHtml && /^\s*<div class="swdd-notice/.test(bodyHtml);
-            const needsTopSep = !!bodyHtml && !bodyIsOnlyNotices;
+            // Notices usados como único body (ex: "Mod não listado", "Mirror sem data") são
+            // criados com noBorderTop=true, então NÃO têm borda própria — o separador sólido
+            // abaixo deles (via needsTopSep=true) é o único divisor visual, o que é correto.
+            const needsTopSep = !!bodyHtml;
             const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, needsTopSep) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
@@ -1258,11 +1256,16 @@
          * @param {string} message - Texto do aviso. Suporta \n e <br> para quebras explícitas.
          * @returns {string} HTML do aviso formatado e pronto para inserção no tooltip
          */
-        createNotice(type, message) {
+        createNotice(type, message, noBorderTop = false) {
             const icons = { info: 'ℹ️', warning: '⚠️', error: '🚫' };
             const icon = icons[type] || icons.info;
             const safeHtml = this.formatTextWrap(message, 50);
-            return `<div class="swdd-notice swdd-notice-${escapeHTML(type)}">` +
+            // noBorderTop: quando o notice é o único conteúdo do body e vem logo após o título,
+            // o título já tem border-bottom (linha sólida) que serve de separador.
+            // Manter border-top no notice criaria dois separadores consecutivos — visual redundante.
+            // Notices que vêm APÓS um grid (ex: exactTimeWarning) devem manter border-top.
+            const borderStyle = noBorderTop ? ' style="border-top:none; margin-top:0; padding-top:0;"' : '';
+            return `<div class="swdd-notice swdd-notice-${escapeHTML(type)}"${borderStyle}>` +
                    `<span class="swdd-notice-icon">${icon}</span>` +
                    `<span class="swdd-notice-text">${safeHtml}</span>` +
                    `</div>`;
@@ -2133,7 +2136,9 @@
 
             const subTipText = GAME.forumUrl ? t.modNotListedSubTip : t.modUnavailableSubTip;
             // 'warning' (amarelo) para "leia as regras"; 'info' (azul) para mirror indisponível.
-            const subTipHtml = subTipText ? TemplateEngine.createNotice(GAME.forumUrl ? 'warning' : 'info', subTipText) : '';
+            // noBorderTop=true: este notice vem logo após o título (sem grid antes),
+            // o título já tem border-bottom — não precisamos de border-top duplicada aqui.
+            const subTipHtml = subTipText ? TemplateEngine.createNotice(GAME.forumUrl ? 'warning' : 'info', subTipText, true) : '';
 
             const tooltipHtmlStr = buildTooltip({
                 stateClass: 'error',
@@ -2262,7 +2267,7 @@
                 stateClass: 'warning',
                 icon: '⚠️',
                 titleText: t.mirrorNoDate,
-                bodyHtml: TemplateEngine.createNotice('info', t.mirrorNoDateTip)
+                bodyHtml: TemplateEngine.createNotice('info', t.mirrorNoDateTip, true)
             });
         } else if (utils.isUpToDate(dateMirror, dateSteam)) {
             // Estado: mirror está na mesma versão (ou mais recente) que a Steam
