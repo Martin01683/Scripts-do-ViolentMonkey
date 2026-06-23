@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.22.53
+// @version      26.06.22.54
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -1268,7 +1268,7 @@
         .swdd-global-dropdown:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .swdd-global-dropdown a { padding: 10px 12px; color: #acb2b8; text-decoration: none; font-size: 12px; transition: background 0.2s; font-family: "Motiva Sans", sans-serif; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none !important; -webkit-user-select: none !important; -moz-user-select: none !important; }
         .swdd-global-dropdown a:hover { background: #3d4450; color: #fff; }
-        .swdd-custom-tooltip { position: fixed !important; margin: 0 !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; padding: 12px !important; color: #acb2b8 !important; font-family: "Motiva Sans", Arial, sans-serif !important; font-size: 13px !important; box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important; pointer-events: none !important; opacity: 0; transition: opacity 0.1s; white-space: nowrap !important; max-width: 300px !important; }
+        .swdd-custom-tooltip { position: fixed !important; margin: 0 !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; padding: 12px !important; color: #acb2b8 !important; font-family: "Motiva Sans", Arial, sans-serif !important; font-size: 13px !important; box-shadow: 0 8px 16px rgba(0,0,0,0.9) !important; pointer-events: none !important; opacity: 0; transition: opacity 0.1s; white-space: nowrap !important; }
         .swdd-custom-tooltip.show { opacity: 1 !important; }
         .swdd-custom-tooltip:popover-open { bottom: auto; right: auto; margin: 0 !important; }
         .swdd-tooltip-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #3d4450; display: flex; align-items: center; gap: 6px; }
