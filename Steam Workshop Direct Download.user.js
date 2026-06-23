@@ -956,6 +956,9 @@
     // Evita injeção direta de strings não higienizadas (Proteção contra XSS).
     // Botão: createModularButton(isCard, btnConfig) | Tooltip: createTooltip(config)
     // ========================================================================
+// Ícone check SVG — substituição do emoji ✅ no estado de mod atualizado
+    const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><path d="M20 6 9 17l-5-5"/></svg>';
+
     const TemplateEngine = {
         // Dicionário Central de Temas: muda a cor/classe aqui e ela reflete no script inteiro
         // (botão principal, bolinhas de status dos mirrors verificados, "melhor versão", etc).
@@ -1061,7 +1064,10 @@
             // Metadados para o sistema de Timer e texto original
             const timerData = config.timerExp ? `data-timer-exp="${config.timerExp}"` : '';
             const originalTextData = config.text ? `data-orig-text="${escapeHTML(config.text)}"` : '';
-            const iconHtml = config.icon ? `<span class="swdd-btn-icon">${escapeHTML(config.icon)}</span> ` : '';
+            const iconContent = config.icon
+                ? (config.icon.startsWith('<') ? config.icon : escapeHTML(config.icon))
+                : '';
+            const iconHtml = config.icon ? `<span class="swdd-btn-icon">${iconContent}</span> ` : '';
 
             // Tooltip via atributo nativo title
             const titleAttr = config.tooltip ? `title="${escapeHTML(config.tooltip)}"` : '';
@@ -2271,14 +2277,14 @@
             });
         } else if (utils.isUpToDate(dateMirror, dateSteam)) {
             // Estado: mirror está na mesma versão (ou mais recente) que a Steam
-            btnConfig.icon = '✅';
+            btnConfig.icon = CHECK_SVG;
             btnConfig.text = t.download;
             btnConfig.stateClass = TemplateEngine.THEMES.success.stateClass;
             // Exemplo de Timer: Poderíamos adicionar um atraso para leitura do aviso de versão defasada
             // btnConfig.timerExp = Date.now() + 5000;
             tooltipHtmlStr = buildTooltip({
                 stateClass: 'success',
-                icon: '✅',
+                icon: CHECK_SVG,
                 titleText: t.modUpdated,
                 bodyHtml: TemplateEngine.createTooltipGrid(true, strSteam, true, mirrorName, strMirror, exactTimeWarningHtml)
             });
