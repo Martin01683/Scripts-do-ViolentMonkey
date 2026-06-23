@@ -1232,7 +1232,12 @@
             // Defaults true: omitir exige opt-out explícito, não opt-in que pode ser esquecido.
             // needsTopSeparator: só desenha a borda separadora se houver bodyHtml antes —
             // caso contrário a borda do título (logo acima) já cumpre esse papel.
-            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, !!bodyHtml) : '';
+            // Exceção: se o bodyHtml terminar com um notice (.swdd-notice), este já possui
+            // sua própria border-top (dashed) via CSS, então adicionar outra borda sólida
+            // logo abaixo geraria dois separadores consecutivos — visualmente redundante.
+            const bodyEndsWithNotice = bodyHtml && /swdd-notice[^>]*>\s*$/.test(bodyHtml.replace(/\s+$/,''));
+            const needsTopSep = !!bodyHtml && !bodyEndsWithNotice;
+            const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, needsTopSep) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
             return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
