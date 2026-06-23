@@ -2187,7 +2187,7 @@
             exactTimeWarningHtml += TemplateEngine.createNotice('info', t.steamFallbackWarn);
         }
         if (dateSteam && dateSteam.hasTimeMismatch) {
-            exactTimeWarningHtml += TemplateEngine.createNotice('warning', t.steamTimeMismatch);
+            exactTimeWarningHtml += TemplateEngine.createNotice('info', t.steamTimeMismatch);
         }
         if (!exactTime && dateMirror && dateSteam && dateSteam !== STEAM_NO_DATE && dateSteam !== STEAM_FETCH_ERROR) {
             // Se o dia coincidir (mesmo sem hora exata para comparar), solta o alerta amarelo
