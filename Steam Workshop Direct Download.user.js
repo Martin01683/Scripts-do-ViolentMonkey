@@ -1947,6 +1947,22 @@
             if (dateSteam instanceof Date) {
                 dateSteam.isFallback = cached.isFallback || false;
                 dateSteam.hasTimeMismatch = cached.hasTimeMismatch || false;
+
+                // BUGFIX: O cache pode ter sido gerado na página de lista (isCurrentPage=false),
+                // onde a verificação do HTML é impossível. Ao entrar na página de detalhes,
+                // a comparação DOM precisa ser feita independentemente do cache ainda ser válido,
+                // pois só aqui temos acesso ao HTML da página para detectar conflitos de horário.
+                const isCurrentPage = new URLSearchParams(window.location.search).get('id') === modId;
+                if (isCurrentPage) {
+                    const htmlDate = utils.parseSteamHTMLDate();
+                    const mismatch = !!(htmlDate && Math.abs(htmlDate.date.getTime() - dateSteam.getTime()) > 300000);
+                    dateSteam.hasTimeMismatch = mismatch;
+                    // Persiste o resultado corrigido no cache para evitar re-verificações desnecessárias
+                    if (cached.hasTimeMismatch !== mismatch) {
+                        cached.hasTimeMismatch = mismatch;
+                        saveSteamCache();
+                    }
+                }
             }
             steamDateCache[modId] = dateSteam;
             return dateSteam;
