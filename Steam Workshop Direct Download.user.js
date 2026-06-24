@@ -308,15 +308,20 @@
          * Prioriza datas explícitas e determina se a hora exata está disponível.
          *
          * ─── CORREÇÃO DE FUSO HORÁRIO: Skymods (smods.ru) ───────────────────────────
-         * As timestamps exibidas nos posts do Skymods (campo "Last revision") não
-         * carregam indicação de fuso horário, mas representam horários em UTC-3.
-         * Como `Date.UTC()` sempre cria instantes em UTC, é necessário somar 3 horas
-         * ao valor lido para obter o instante UTC correto.
+         * O servidor do Skymods entrega os horários do campo "Last revision" em UTC-3,
+         * SEM qualquer indicação de fuso na string HTML bruta.
+         * O site possui um script client-side (`datetime-localize.min.js`) que, no
+         * navegador, adiciona +3 horas e acrescenta o rótulo "UTC" antes de exibir.
          *
-         *   Exemplo:  "Last revision: 15 Jan 2024 12:00"
-         *             Skymods exibe → 12:00 (UTC-3)
-         *             UTC real      → 15:00  (12 + 3 = 15)
-         *             Armazenado    → Date.UTC(2024, 0, 15, 15, 0, 0)  ✓
+         * Como o script busca o HTML via GM_xmlhttpRequest (sem executar JavaScript),
+         * ele recebe o HTML cru com os horários ainda em UTC-3. O `hours + 3` aqui
+         * replica manualmente exatamente o que o datetime-localize.min.js faria.
+         *
+         *   Prova concreta (mod 3746153385, observada no HTML real das duas páginas):
+         *     HTML bruto do servidor  → "18 Jun at 19:58"        ← o que este parser lê
+         *     Exibição no navegador   → "18 Jun at 22:58 UTC"    ← após datetime-localize.min.js
+         *     API da Steam (UTC)      → 22:58 UTC                ← referência para comparação
+         *     `hours + 3` = 19+3=22  → Date.UTC(..., 22, 58, 0) ✓
          *
          * Isso é INTENCIONAL — sem esse ajuste o script concluiria, de forma errada,
          * que o mirror está 3 horas desatualizado em relação à Steam.
