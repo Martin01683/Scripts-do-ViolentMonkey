@@ -306,6 +306,22 @@
         /**
          * Extrai e converte strings de datas complexas de mirrors (como o Skymods).
          * Prioriza datas explícitas e determina se a hora exata está disponível.
+         *
+         * ─── CORREÇÃO DE FUSO HORÁRIO: Skymods (smods.ru) ───────────────────────────
+         * As timestamps exibidas nos posts do Skymods (campo "Last revision") não
+         * carregam indicação de fuso horário, mas representam horários em UTC-3.
+         * Como `Date.UTC()` sempre cria instantes em UTC, é necessário somar 3 horas
+         * ao valor lido para obter o instante UTC correto.
+         *
+         *   Exemplo:  "Last revision: 15 Jan 2024 12:00"
+         *             Skymods exibe → 12:00 (UTC-3)
+         *             UTC real      → 15:00  (12 + 3 = 15)
+         *             Armazenado    → Date.UTC(2024, 0, 15, 15, 0, 0)  ✓
+         *
+         * Isso é INTENCIONAL — sem esse ajuste o script concluiria, de forma errada,
+         * que o mirror está 3 horas desatualizado em relação à Steam.
+         * NÃO remova nem altere o offset sem verificar o comportamento do site.
+         * ─────────────────────────────────────────────────────────────────────────────
          */
         parseSmodsDate: function(dateStr) {
             if (!dateStr) return null;
@@ -327,6 +343,8 @@
                     if (match[4] !== undefined && match[5] !== undefined) {
                         const hours = parseInt(match[4], 10);
                         const minutes = parseInt(match[5], 10);
+                        // INTENCIONAL: `hours + 3` converte UTC-3 (fuso do Skymods) → UTC.
+                        // Veja o bloco de documentação acima para a explicação completa.
                         parsedDate = new Date(Date.UTC(year, month, day, hours + 3, minutes, 0));
                         exact = true; // Confirma que a hora/minuto foi extraída com precisão
                     } else {
@@ -352,9 +370,31 @@
             return null;
         },
 
+        // ─── CORREÇÃO DE FUSO HORÁRIO: Insane Mirror (insane.x10.mx) e Insane GH ─────
+        // O dono do site insane.x10.mx documenta explicitamente em seu cabeçalho:
+        //   "The shown upload time is GMT+1!"
+        // Ou seja, TODOS os timestamps desse mirror (tanto do .php quanto do JSON no
+        // GitHub) estão em GMT+1, sem qualquer indicador de fuso embutido na string.
+        //
+        // Para normalizar a GMT+1 → UTC antes de comparar com os timestamps da Steam:
+        //   • parseInsaneDate   → anexa '+01:00' à string ISO, deixando o construtor
+        //                         Date() do JS fazer a conversão automaticamente.
+        //   • parseInsaneGHDate → subtrai 1 hora do componente de hora antes de passar
+        //                         para Date.UTC(), que sempre espera valores em UTC.
+        //
+        //   Exemplo (ambas as funções chegam ao mesmo resultado):
+        //     String bruta:  "2024-01-15 15:00"  (GMT+1, conforme documentado)
+        //     UTC correto:   2024-01-15 14:00 UTC  (15 - 1 = 14)
+        //
+        // INTENCIONAL — sem esse ajuste as datas apareceriam 1 hora mais novas do que
+        // realmente são, causando falsos positivos de "mirror atualizado".
+        // NÃO remova nem altere o offset sem verificar o comportamento do site.
+        // ─────────────────────────────────────────────────────────────────────────────
+
         // Métodos auxiliares para parse de Insane Mirror e JSON do Insane GH
         parseInsaneDate: function(dateStr) {
             if (!dateStr || dateStr.startsWith('0000-00-00')) return null;
+            // INTENCIONAL: '+01:00' declara o fuso GMT+1 do Insane Mirror → JS converte para UTC.
             const d = new Date(dateStr.replace(' ', 'T') + '+01:00');
             return isNaN(d.getTime()) ? null : { date: d, exact: /\d{2}:\d{2}/.test(dateStr) };
         },
@@ -362,6 +402,9 @@
             if (!dateStr) return null;
             const match = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
             if (!match) return null;
+            // INTENCIONAL: `match[4] - 1` converte GMT+1 (Insane GH JSON) → UTC.
+            // Equivalente ao '+01:00' do parseInsaneDate, mas aplicado manualmente
+            // porque Date.UTC() não aceita indicadores de fuso — só recebe horas UTC.
             return { date: new Date(Date.UTC(match[1], match[2] - 1, match[3], match[4] - 1, match[5], match[6] || 0)), exact: true };
         },
         getIdFromName: function(name) {
