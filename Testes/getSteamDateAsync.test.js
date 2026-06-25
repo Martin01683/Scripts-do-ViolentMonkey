@@ -88,7 +88,7 @@ describe('getSteamDateAsync — cache-hit + isCurrentPage bugfix', () => {
         steamDateCache       = {};
         saveSteamCacheCalled = [];
         utils                = {
-            parseSteamHTMLDate: jest.fn()
+            parseSteamHTMLDate: vi.fn()
         };
     });
 

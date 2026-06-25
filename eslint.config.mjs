@@ -3,7 +3,7 @@ import globals from "globals";
 
 export default [
     js.configs.recommended,
-    // Testes Jest
+    // Testes Vitest
     {
         files: ["Testes/*.test.js"],
         ignores: ["Testes/*.playwright.test.js"],
@@ -12,33 +12,36 @@ export default [
             sourceType: "commonjs",
             globals: {
                 ...globals.node,
-                describe: "readonly", test: "readonly", it: "readonly",
-                expect: "readonly", beforeEach: "readonly", afterEach: "readonly",
-                beforeAll: "readonly", afterAll: "readonly", jest: "readonly",
+                // Vitest globals (activos via globals:true no vitest.config.js)
+                describe:   "readonly",
+                test:       "readonly",
+                it:         "readonly",
+                expect:     "readonly",
+                beforeEach: "readonly",
+                afterEach:  "readonly",
+                beforeAll:  "readonly",
+                afterAll:   "readonly",
+                vi:         "readonly",
             },
         },
         rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off" },
     },
-    // Testes Playwright (Node host + `window` usada dentro de page.evaluate)
+    // Testes Playwright
     {
         files: ["Testes/*.playwright.test.js"],
         languageOptions: {
             ecmaVersion: 2020,
             sourceType: "commonjs",
-            globals: {
-                ...globals.node,
-                ...globals.browser,  // window, document, etc. usados em page.evaluate
-                test: "readonly", expect: "readonly",
-            },
+            globals: { ...globals.node, ...globals.browser, test: "readonly", expect: "readonly" },
         },
         rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off" },
     },
-    // playwright.config.js
+    // Configs (playwright, vitest, eslint)
     {
-        files: ["playwright.config.js"],
+        files: ["playwright.config.js", "vitest.config.js"],
         languageOptions: {
             ecmaVersion: 2020,
-            sourceType: "commonjs",
+            sourceType: "module",
             globals: { ...globals.node },
         },
         rules: { "no-undef": "error" },
