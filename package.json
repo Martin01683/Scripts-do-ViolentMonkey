@@ -1,7 +1,7 @@
 {
   "name": "scripts-do-violentmonkey",
   "version": "1.0.0",
-  "description": "Userscripts para ViolentMonkey — Steam Workshop e SimsFinds",
+  "description": "Userscripts para ViolentMonkey",
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run",
