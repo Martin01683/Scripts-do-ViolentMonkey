@@ -2,7 +2,6 @@
   "name": "scripts-do-violentmonkey",
   "version": "1.0.0",
   "description": "Userscripts para ViolentMonkey — Steam Workshop e SimsFinds",
-  "main": "SimsFinds - Direct Download.user.js",
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run",
@@ -16,7 +15,8 @@
   },
   "keywords": [],
   "author": "Martin01683",
-  "license": "ISC",
+  "license": "UNLICENSED",
+  "private": true,
   "bugs": {
     "url": "https://github.com/Martin01683/Scripts-do-ViolentMonkey/issues"
   },
