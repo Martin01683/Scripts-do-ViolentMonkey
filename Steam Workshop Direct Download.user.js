@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.25.14
+// @version      26.06.25.15
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -184,19 +184,406 @@
 
         // Tabela Manual: base garantida cobrindo abreviações dos idiomas mais comuns do Steam.
         // Serve como âncora mesmo quando o Intl estiver indisponível no ambiente.
+        // Cobre todos os 30 idiomas oficialmente suportados pela Steam (2025):
+        // Português (PT/BR), English, Español (ES/ES-419), Français, Deutsch, Italiano,
+        // Русский, Українська, Български, Polski, Čeština, Română, Magyar, Ελληνικά,
+        // Nederlands, Svenska, Dansk, Norsk, Suomi, Türkçe, Bahasa Indonesia,
+        // Bahasa Melayu, Tiếng Việt, ภาษาไทย, 简体中文, 繁體中文, 日本語, 한국어.
+        // Nota: bg (Bulgário) gera "01".."12" via Intl — não incluído no manual por serem
+        //       dígitos numéricos genéricos. vi (Vietnamita) usa frases compostas "tháng N"
+        //       cobertas pelo Intl; incluídas aqui apenas as formas sem espaço detectáveis.
+        // Nota: entradas CJK e Thai usam formas numéricas como "1月" / "1월" / "一月" /
+        //       "มกราคม" que o Intl já cobre; incluídas aqui como âncora de fallback.
         const MANUAL = {
-            jan:0,janeiro:0,enero:0,ene:0,янв:0,gen:0,sty:0,oca:0,
-            feb:1,fev:1,fév:1,fevereiro:1,febrero:1,фев:1,lut:1,şub:1,
-            mar:2,março:2,marzo:2,мар:2,mär:2,mrt:2,
-            apr:3,abr:3,abril:3,avr:3,апр:3,kwi:3,nis:3,
-            may:4,mai:4,maio:4,mayo:4,мая:4,mag:4,mei:4,maj:4,
-            jun:5,junho:5,junio:5,juin:5,июн:5,giu:5,cze:5,haz:5,
-            jul:6,julho:6,julio:6,juil:6,июл:6,lug:6,lip:6,tem:6,
-            aug:7,ago:7,agosto:7,août:7,aoû:7,august:7,avg:7,авг:7,sie:7,ağu:7,
-            sep:8,set:8,setembro:8,septiembre:8,sept:8,сен:8,wrz:8,eyl:8,
-            oct:9,out:9,outubro:9,octubre:9,okt:9,окт:9,ott:9,paź:9,eki:9,
-            nov:10,novembro:10,noviembre:10,ноя:10,lis:10,kas:10,
-            dec:11,dez:11,dezembro:11,diciembre:11,dic:11,déc:11,дек:11,gru:11,ara:11
+            // ── Janeiro / January (0) ──────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, FR, DE, NL, SV, DA, NO, ID, MS
+            jan:0, january:0, janeiro:0, enero:0, janvier:0, januar:0, januari:0,
+            // FR(abrev), EN/DE abrev já coberta por 'jan'
+            janv:0,
+            // IT: gennaio / gen
+            gennaio:0, gen:0,
+            // ES abrev
+            ene:0,
+            // RU: январь / янв
+            январь:0, янв:0,
+            // UK: січень / січ
+            січень:0, січ:0,
+            // PL: styczeń / sty
+            styczeń:0, sty:0,
+            // CS: leden / led
+            leden:0, led:0,
+            // RO: ianuarie / ian
+            ianuarie:0, ian:0,
+            // HU: január (mesmo que DE/SV 'januar'; a forma longa é 'január' — acento)
+            január:0,
+            // EL: ιανουαρίου / ιαν
+            ιανουαρίου:0, ιαν:0,
+            // FI: tammikuu / tammi
+            tammikuu:0, tammi:0,
+            // TR: ocak / oca
+            ocak:0, oca:0,
+            // TH: มกราคม / ม.ค
+            มกราคม:0, 'ม.ค':0,
+            // ZH-Hans: 一月  |  ZH-Hant/JA/KO: 1月 / 1월
+            '一月':0, '1月':0, '1월':0,
+
+            // ── Fevereiro / February (1) ───────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, DE, NL, SV, DA, NO, ID, MS
+            february:1, fevereiro:1, febrero:1, februar:1, februari:1,
+            // PT abrev
+            fev:1,
+            // EN/ES/DE/NL/SV/DA/NO/ID/MS abrev
+            feb:1,
+            // FR: février / févr
+            février:1, févr:1,
+            // IT: febbraio
+            febbraio:1,
+            // RU: февраль / февр
+            февраль:1, февр:1,
+            // UK: лютий / лют
+            лютий:1, лют:1,
+            // PL: luty / lut
+            luty:1, lut:1,
+            // CS: únor / úno
+            únor:1, úno:1,
+            // RO: februarie (abrev 'feb' já coberta)
+            februarie:1,
+            // HU: február / febr
+            február:1, febr:1,
+            // EL: φεβρουαρίου / φεβ
+            φεβρουαρίου:1, φεβ:1,
+            // FI: helmikuu / helmi
+            helmikuu:1, helmi:1,
+            // TR: şubat / şub
+            şubat:1, şub:1,
+            // TH: กุมภาพันธ์ / ก.พ
+            กุมภาพันธ์:1, 'ก.พ':1,
+            // ZH / KO
+            '二月':1, '2月':1, '2월':1,
+
+            // ── Março / March (2) ─────────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, IT (mesmo que EN: 'marzo'→mar), NO
+            march:2, março:2, marzo:2, marts:2,
+            // abrev compartilhada PT/EN/ES/IT/DA/NO/TR/ID
+            mar:2,
+            // FR: mars (forma curta e longa iguais)
+            mars:2,
+            // DE: märz / mär
+            märz:2, mär:2,
+            // NL: maart / mrt
+            maart:2, mrt:2,
+            // RU: март (longo e curto iguais)
+            март:2,
+            // UK: березень / бер
+            березень:2, бер:2,
+            // PL: marzec (abrev 'mar' coberta)
+            marzec:2,
+            // CS: březen / bře
+            březen:2, bře:2,
+            // RO: martie (abrev 'mar' coberta)
+            martie:2,
+            // HU: március / márc
+            március:2, márc:2,
+            // EL: μαρτίου / μαρ
+            μαρτίου:2, μαρ:2,
+            // FI: maaliskuu / maalis
+            maaliskuu:2, maalis:2,
+            // TR: mart (abrev 'mar' coberta)
+            mart:2,
+            // ID: maret (abrev 'mar' coberta)
+            maret:2,
+            // MS: mac (forma única — 3 chars, sem colisão)
+            mac:2,
+            // TH: มีนาคม / มี.ค
+            มีนาคม:2, 'มี.ค':2,
+            // ZH / KO
+            '三月':2, '3月':2, '3월':2,
+
+            // ── Abril / April (3) ─────────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, DE, NL, SV, DA, NO, ID, MS
+            april:3, abril:3,
+            // abrev compartilhada PT/EN/ES/DE/NL/SV/DA/NO/ID/MS/IT/RO
+            apr:3, abr:3,
+            // FR: avril / avr
+            avril:3, avr:3,
+            // IT: aprile (abrev 'apr' coberta)
+            aprile:3,
+            // RU: апрель / апр
+            апрель:3, апр:3,
+            // UK: квітень / квіт
+            квітень:3, квіт:3,
+            // PL: kwiecień / kwi
+            kwiecień:3, kwi:3,
+            // CS: duben / dub
+            duben:3, dub:3,
+            // RO: aprilie (abrev 'apr' coberta)
+            aprilie:3,
+            // HU: április / ápr
+            április:3, ápr:3,
+            // EL: απριλίου / απρ
+            απριλίου:3, απρ:3,
+            // FI: huhtikuu / huhti
+            huhtikuu:3, huhti:3,
+            // TR: nisan / nis
+            nisan:3, nis:3,
+            // TH: เมษายน / เม.ย
+            เมษายน:3, 'เม.ย':3,
+            // ZH / KO
+            '四月':3, '4月':3, '4월':3,
+
+            // ── Maio / May (4) ────────────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, FR, DE, RO, NO
+            maio:4, may:4, mayo:4, mai:4,
+            // IT: maggio / mag
+            maggio:4, mag:4,
+            // RU: май (longo e curto iguais)
+            май:4,
+            // UK: травень / трав
+            травень:4, трав:4,
+            // PL, SV, DA: maj
+            maj:4,
+            // CS: květen / kvě
+            květen:4, kvě:4,
+            // HU: május / máj
+            május:4, máj:4,
+            // EL: μαΐου / μαΐ
+            μαΐου:4, 'μαΐ':4,
+            // NL, ID, MS: mei
+            mei:4,
+            // FI: toukokuu / touko
+            toukokuu:4, touko:4,
+            // TR: mayıs (abrev 'may' coberta)
+            mayıs:4,
+            // TH: พฤษภาคม / พ.ค
+            พฤษภาคม:4, 'พ.ค':4,
+            // ZH / KO
+            '五月':4, '5月':4, '5월':4,
+
+            // ── Junho / June (5) ──────────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, DE, NL, SV, DA, NO, ID, MS
+            june:5, junho:5, junio:5, juni:5,
+            // abrev compartilhada PT/EN/ES/DE/NL/SV/DA/NO/ID/MS
+            jun:5,
+            // FR: juin (longo e curto iguais)
+            juin:5,
+            // IT: giugno / giu
+            giugno:5, giu:5,
+            // RU: июнь (longo e curto iguais)
+            июнь:5,
+            // UK: червень / черв
+            червень:5, черв:5,
+            // PL: czerwiec / cze
+            czerwiec:5, cze:5,
+            // CS: červen / čvn
+            červen:5, čvn:5,
+            // RO: iunie / iun
+            iunie:5, iun:5,
+            // HU: június / jún
+            június:5, jún:5,
+            // EL: ιουνίου / ιουν
+            ιουνίου:5, ιουν:5,
+            // FI: kesäkuu / kesä
+            kesäkuu:5, kesä:5,
+            // TR: haziran / haz
+            haziran:5, haz:5,
+            // TH: มิถุนายน / มิ.ย
+            มิถุนายน:5, 'มิ.ย':5,
+            // ZH / KO
+            '六月':5, '6月':5, '6월':5,
+
+            // ── Julho / July (6) ──────────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, DE, NL, SV, DA, NO, ID, MS
+            july:6, julho:6, julio:6, juli:6,
+            // abrev compartilhada PT/EN/ES/DE/NL/SV/DA/NO/ID/MS
+            jul:6,
+            // FR: juillet / juil
+            juillet:6, juil:6,
+            // IT: luglio / lug
+            luglio:6, lug:6,
+            // RU: июль (longo e curto iguais)
+            июль:6,
+            // UK: липень / лип
+            липень:6, лип:6,
+            // PL: lipiec / lip
+            lipiec:6, lip:6,
+            // CS: červenec / čvc
+            červenec:6, čvc:6,
+            // RO: iulie / iul
+            iulie:6, iul:6,
+            // HU: július / júl
+            július:6, júl:6,
+            // EL: ιουλίου / ιουλ
+            ιουλίου:6, ιουλ:6,
+            // BG: юли
+            юли:6,
+            // FI: heinäkuu / heinä
+            heinäkuu:6, heinä:6,
+            // TR: temmuz / tem
+            temmuz:6, tem:6,
+            // MS: julai (abrev 'jul' coberta)
+            julai:6,
+            // TH: กรกฎาคม / ก.ค
+            กรกฎาคม:6, 'ก.ค':6,
+            // ZH / KO
+            '七月':6, '7月':6, '7월':6,
+
+            // ── Agosto / August (7) ───────────────────────────────────────────────
+            // PT/BR, EN, DE, NL, SV, DA, NO, RO
+            august:7, agosto:7, augustus:7, augusti:7,
+            // abrev compartilhada PT/EN/DE/NL/SV/DA/NO/RO/HU
+            aug:7, ago:7,
+            // FR: août (longo e curto iguais; 'aoû' era typo da tabela antiga — 'août' é o correto)
+            août:7,
+            // RU: август / авг
+            август:7, авг:7,
+            // UK: серпень / серп
+            серпень:7, серп:7,
+            // PL: sierpień / sie
+            sierpień:7, sie:7,
+            // CS: srpen / srp
+            srpen:7, srp:7,
+            // HU: augusztus (abrev 'aug' coberta)
+            augusztus:7,
+            // EL: αυγούστου / αυγ
+            αυγούστου:7, αυγ:7,
+            // FI: elokuu / elo
+            elokuu:7, elo:7,
+            // TR: ağustos / ağu
+            ağustos:7, ağu:7,
+            // ID: agustus / agu
+            agustus:7, agu:7,
+            // MS: ogos / ogo
+            ogos:7, ogo:7,
+            // TH: สิงหาคม / ส.ค
+            สิงหาคม:7, 'ส.ค':7,
+            // ZH / KO
+            '八月':7, '8月':7, '8월':7,
+
+            // ── Setembro / September (8) ──────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, FR, DE, NL, SV, DA, NO, ID, MS
+            september:8, setembro:8, septiembre:8, septembre:8, settembre:8,
+            // abrev compartilhada PT/IT
+            set:8,
+            // abrev compartilhada EN/DE/NL/SV/DA/NO/ID/MS
+            sep:8,
+            // ES/ES-419/FR/RO abrev
+            sept:8,
+            // RU: сентябрь / сент
+            сентябрь:8, сент:8,
+            // UK: вересень / вер
+            вересень:8, вер:8,
+            // PL: wrzesień / wrz
+            wrzesień:8, wrz:8,
+            // CS: září / zář
+            září:8, zář:8,
+            // RO: septembrie (abrev 'sept' coberta)
+            septembrie:8,
+            // HU: szeptember / szept
+            szeptember:8, szept:8,
+            // EL: σεπτεμβρίου / σεπ
+            σεπτεμβρίου:8, σεπ:8,
+            // FI: syyskuu / syys
+            syyskuu:8, syys:8,
+            // TR: eylül / eyl
+            eylül:8, eyl:8,
+            // TH: กันยายน / ก.ย
+            กันยายน:8, 'ก.ย':8,
+            // ZH / KO
+            '九月':8, '9月':8, '9월':8,
+
+            // ── Outubro / October (9) ─────────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, FR, DE, NL, SV, DA, NO, ID, MS
+            october:9, outubro:9, octubre:9, octobre:9, oktober:9,
+            // abrev compartilhada PT
+            out:9,
+            // abrev compartilhada EN/ES/FR/RO
+            oct:9,
+            // abrev compartilhada DE/NL/SV/DA/NO/ID/MS/HU
+            okt:9,
+            // IT: ottobre / ott
+            ottobre:9, ott:9,
+            // RU: октябрь / окт
+            октябрь:9, окт:9,
+            // UK: жовтень / жовт
+            жовтень:9, жовт:9,
+            // PL: październik / paź
+            październik:9, paź:9,
+            // CS: říjen / říj
+            říjen:9, říj:9,
+            // RO: octombrie (abrev 'oct' coberta)
+            octombrie:9,
+            // HU: október (abrev 'okt' coberta)
+            október:9,
+            // EL: οκτωβρίου / οκτ
+            οκτωβρίου:9, οκτ:9,
+            // FI: lokakuu / loka
+            lokakuu:9, loka:9,
+            // TR: ekim / eki
+            ekim:9, eki:9,
+            // TH: ตุลาคม / ต.ค
+            ตุลาคม:9, 'ต.ค':9,
+            // ZH / KO
+            '十月':9, '10月':9, '10월':9,
+
+            // ── Novembro / November (10) ──────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, FR, DE, IT, NL, SV, DA, NO, HU, RO, ID, MS
+            november:10, novembro:10, noviembre:10, novembre:10,
+            // abrev compartilhada por praticamente todos os idiomas latinos/germânicos
+            nov:10,
+            // RU: ноябрь / нояб
+            ноябрь:10, нояб:10,
+            // UK: листопад / лист
+            листопад:10, лист:10,
+            // PL, CS: listopad / lis
+            listopad:10, lis:10,
+            // RO: noiembrie (abrev 'nov' coberta)
+            noiembrie:10,
+            // EL: νοεμβρίου / νοε
+            νοεμβρίου:10, νοε:10,
+            // FI: marraskuu / marras
+            marraskuu:10, marras:10,
+            // TR: kasım / kas
+            kasım:10, kas:10,
+            // TH: พฤศจิกายน / พ.ย
+            พฤศจิกายน:10, 'พ.ย':10,
+            // ZH / KO
+            '十一月':10, '11月':10, '11월':10,
+
+            // ── Dezembro / December (11) ──────────────────────────────────────────
+            // PT/BR, EN, ES/ES-419, DE, IT, NL, SV, DA, HU, RO, ID
+            december:11, dezembro:11, diciembre:11, dezember:11, dicembre:11,
+            // abrev compartilhada EN/ES/IT/NL/SV/DA/HU/RO/ID
+            dec:11,
+            // PT/BR abrev
+            dez:11,
+            // ES/IT abrev
+            dic:11,
+            // FR: décembre / déc
+            décembre:11, déc:11,
+            // RU: декабрь / дек
+            декабрь:11, дек:11,
+            // UK: грудень / груд
+            грудень:11, груд:11,
+            // PL: grudzień / gru
+            grudzień:11, gru:11,
+            // CS: prosinec / pro
+            prosinec:11, pro:11,
+            // RO: decembrie (abrev 'dec' coberta)
+            decembrie:11,
+            // EL: δεκεμβρίου / δεκ
+            δεκεμβρίου:11, δεκ:11,
+            // NO: desember / des
+            desember:11, des:11,
+            // FI: joulukuu / joulu
+            joulukuu:11, joulu:11,
+            // TR: aralık / ara
+            aralık:11, ara:11,
+            // MS: disember / dis
+            disember:11, dis:11,
+            // TH: ธันวาคม / ธ.ค
+            ธันวาคม:11, 'ธ.ค':11,
+            // ZH / KO
+            '十二月':11, '12月':11, '12월':11
         };
 
         let _cache = null;
