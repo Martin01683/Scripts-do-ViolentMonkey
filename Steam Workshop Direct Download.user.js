@@ -2020,14 +2020,14 @@
         .swdd-notice-error { color: #ff6b6b; }
         #swdd-settings-fab { position: fixed !important; bottom: 20px !important; right: 20px !important; z-index: 2147483646 !important; border-radius: 50% !important; width: 36px !important; height: 36px !important; padding: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; cursor: pointer !important; background: linear-gradient(to bottom, #343f4d 5%, #222933 95%) !important; color: #acb2b8 !important; border: 1px solid #455366 !important; box-shadow: 0 4px 12px rgba(0,0,0,0.6) !important; transition: filter 0.2s, transform 0.2s, box-shadow 0.2s !important; user-select: none !important; -webkit-user-select: none !important; }
         #swdd-settings-fab:hover { filter: brightness(1.2) !important; transform: translateY(-2px) !important; box-shadow: 0 6px 16px rgba(0,0,0,0.8) !important; }
-        #swdd-settings-fab.swdd-fab-open { background: linear-gradient(to bottom, #3f5c1e 5%, #2c4015 95%) !important; color: #A3E33B !important; border-color: #5a852a !important; }
+        #swdd-settings-fab.swdd-fab-open { background: linear-gradient(to bottom, #0d3d6b 5%, #071e35 95%) !important; color: #66c0f4 !important; border-color: #1a9fff !important; }
         #swdd-settings-panel { position: fixed !important; z-index: 2147483647 !important; background: #171a21 !important; border: 1px solid #3d4450 !important; border-radius: 6px !important; min-width: 240px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.9) !important; overflow: hidden !important; display: none !important; }
         #swdd-settings-panel.swdd-panel-show { display: block !important; }
         .swdd-settings-header { padding: 8px 12px 7px; color: #66c0f4; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #3d4450; font-family: "Motiva Sans", Arial, sans-serif; display: flex; align-items: center; gap: 6px; }
         .swdd-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; color: #acb2b8; font-size: 12px; font-family: "Motiva Sans", Arial, sans-serif; transition: background 0.15s; user-select: none; -webkit-user-select: none; -moz-user-select: none; }
         .swdd-settings-row:hover { background: #3d4450 !important; color: #fff !important; }
         .swdd-toggle-switch { width: 32px; height: 18px; border-radius: 9px; position: relative; transition: background 0.2s; flex-shrink: 0; }
-        .swdd-toggle-switch.swdd-tog-on { background: #A3E33B; }
+        .swdd-toggle-switch.swdd-tog-on { background: #1a9fff; }
         .swdd-toggle-switch.swdd-tog-off { background: #455366; }
         .swdd-toggle-switch::after { content: ''; position: absolute; width: 14px; height: 14px; background: #fff; border-radius: 50%; top: 2px; transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
         .swdd-toggle-switch.swdd-tog-on::after { left: 16px; }
@@ -3264,6 +3264,9 @@
             if (hasElementNodes) break;
         }
         if (hasElementNodes) { clearTimeout(domCheckTimeout); domCheckTimeout = setTimeout(runInjectors, 150); }
+        // Re-injeta o FAB imediatamente se o Steam remover os elementos do DOM
+        // (sem debounce: o FAB deve reaparecer antes mesmo da próxima renderização).
+        ensureSettingsFab();
     });
 
     observer.observe(observerTarget, { childList: true, subtree: true });
@@ -3309,13 +3312,32 @@
     const settingsPanel = document.createElement('div');
 
     settingsFab.id        = 'swdd-settings-fab';
+    settingsFab.className = 'swdd-fab-el'; // className começa com "swdd-": o MutationObserver ignora re-inserções
     settingsFab.setAttribute('aria-label', t.settingsTitle || 'Configurações SWDD');
     settingsFab.innerHTML = SvgIcon.build('settings', { size: 18, style: 'display:block;' });
 
-    settingsPanel.id = 'swdd-settings-panel';
+    settingsPanel.id        = 'swdd-settings-panel';
+    settingsPanel.className = 'swdd-panel-el'; // idem
 
     document.body.appendChild(settingsPanel);
     document.body.appendChild(settingsFab);
+
+    /**
+     * Re-injeta FAB e painel no body se o Steam tiver removido os elementos
+     * (ex.: navegação SPA que substitui o conteúdo do body).
+     * Chamado pelo MutationObserver a cada mutação, sem debounce.
+     * O `className` "swdd-*" dos elementos garante que sua própria re-inserção
+     * não dispara o debounce de `runInjectors()`.
+     */
+    function ensureSettingsFab() {
+        if (settingsFab.isConnected) return; // já no DOM, nada a fazer
+        // Fecha o painel antes de re-injetar (a página mudou; estado antigo não é mais válido)
+        settingsPanel.classList.remove('swdd-panel-show');
+        settingsFab.classList.remove('swdd-fab-open');
+        const target = document.body || document.documentElement;
+        target.appendChild(settingsPanel);
+        target.appendChild(settingsFab);
+    }
 
     /**
      * Posiciona o painel acima do FAB e garante que não extrapole as bordas da tela.

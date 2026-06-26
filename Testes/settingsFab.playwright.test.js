@@ -248,12 +248,12 @@ test('Persistência: dois toggles independentes não interferem entre si', async
 // BLOCO 7: Estilo visual
 // ════════════════════════════════════════════════════════════════════════════
 
-test('Estilo: toggle ON tem fundo verde (#A3E33B)', async ({ page }) => {
+test('Estilo: toggle ON tem fundo azul (#1a9fff)', async ({ page }) => {
     await openPanel(page);
     // Mirror começa ON; verifica cor de fundo
     const bg = await page.locator(`${rowMirror()} .swdd-toggle-switch`).evaluate(el => getComputedStyle(el).backgroundColor);
-    // rgb(163, 227, 59) = #A3E33B
-    expect(bg).toBe('rgb(163, 227, 59)');
+    // rgb(26, 159, 255) = #1a9fff
+    expect(bg).toBe('rgb(26, 159, 255)');
 });
 
 test('Estilo: toggle OFF tem fundo escuro (#455366)', async ({ page }) => {
