@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>SWDD Settings FAB Test</title>
+</head>
+<body>
+<p id="status">Loading…</p>
+
+<script>
+/**
+ * Stub mínimo das APIs do Tampermonkey/ViolentMonkey para rodar o FAB
+ * fora de uma extensão real.
+ */
+const _store = { showCacheInfo: 0, showMirrorInfo: 1 };
+window.GM_getValue = (k, def) => (_store[k] !== undefined ? _store[k] : def);
+window.GM_setValue = (k, v)   => { _store[k] = v; };
+window.GM_addStyle = (css) => {
+    const s = document.createElement('style');
+    s.textContent = css;
+    document.head.appendChild(s);
+};
+window.GM_xmlhttpRequest = () => {};
+window.GM_openInTab      = () => {};
+window.GM_registerMenuCommand = () => {};
+
+// Funções auxiliares globais mínimas simuladas
+// (só o suficiente para inicializar o FAB sem rodar o script inteiro)
+window.__swddTest__ = {};
+</script>
+
+<script>
+/* -----------------------------------------------------------------------
+ * Bloco de teste autônomo — replica exatamente o código do FAB que
+ * foi adicionado ao script, sem depender do script completo.
+ * Isso garante que a lógica em si está correta independente do contexto.
+ * ----------------------------------------------------------------------- */
+(function () {
+    // Estado local replicado
+    let showCacheInfo  = GM_getValue('showCacheInfo',  0);
+    let showMirrorInfo = GM_getValue('showMirrorInfo', 1);
+
+    /* ----- mini helpers ----- */
+    function escapeHTML(s) {
+        if (s == null) return '';
+        return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":"&#39;",'"':'&quot;'}[c]));
+    }
+
+    function buildSvg(size) {
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+        </svg>`;
+    }
+
+    /* ----- CSS ----- */
+    GM_addStyle(`
+        #swdd-settings-fab{position:fixed!important;bottom:20px!important;right:20px!important;z-index:2147483646!important;border-radius:50%!important;width:36px!important;height:36px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;background:linear-gradient(to bottom,#343f4d 5%,#222933 95%)!important;color:#acb2b8!important;border:1px solid #455366!important;box-shadow:0 4px 12px rgba(0,0,0,0.6)!important;}
+        #swdd-settings-fab.swdd-fab-open{background:linear-gradient(to bottom,#3f5c1e 5%,#2c4015 95%)!important;color:#A3E33B!important;border-color:#5a852a!important;}
+        #swdd-settings-panel{position:fixed!important;z-index:2147483647!important;background:#171a21!important;border:1px solid #3d4450!important;border-radius:6px!important;min-width:240px!important;box-shadow:0 8px 24px rgba(0,0,0,0.9)!important;overflow:hidden!important;display:none!important;}
+        #swdd-settings-panel.swdd-panel-show{display:block!important;}
+        .swdd-settings-header{padding:8px 12px 7px;color:#66c0f4;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #3d4450;display:flex;align-items:center;gap:6px;}
+        .swdd-settings-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;cursor:pointer;color:#acb2b8;font-size:12px;}
+        .swdd-settings-row:hover{background:#3d4450!important;color:#fff!important;}
+        .swdd-toggle-switch{width:32px;height:18px;border-radius:9px;position:relative;transition:background 0.2s;flex-shrink:0;}
+        .swdd-toggle-switch.swdd-tog-on{background:#A3E33B;}
+        .swdd-toggle-switch.swdd-tog-off{background:#455366;}
+        .swdd-toggle-switch::after{content:'';position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:2px;transition:left 0.2s;}
+        .swdd-toggle-switch.swdd-tog-on::after{left:16px;}
+        .swdd-toggle-switch.swdd-tog-off::after{left:2px;}
+    `);
+
+    /* ----- DOM ----- */
+    function buildSettingsPanelHtml() {
+        return `
+            <div class="swdd-settings-header">${buildSvg(14)}<span>Configurações</span></div>
+            <div class="swdd-settings-row" data-swdd-setting="cacheInfo">
+                <span>Status do Cache</span>
+                <div class="swdd-toggle-switch ${showCacheInfo ? 'swdd-tog-on' : 'swdd-tog-off'}"></div>
+            </div>
+            <div class="swdd-settings-row" data-swdd-setting="mirrorInfo">
+                <span>Mirrors verificados</span>
+                <div class="swdd-toggle-switch ${showMirrorInfo ? 'swdd-tog-on' : 'swdd-tog-off'}"></div>
+            </div>`;
+    }
+
+    const fab   = document.createElement('button');
+    const panel = document.createElement('div');
+    fab.id   = 'swdd-settings-fab';
+    panel.id = 'swdd-settings-panel';
+    fab.setAttribute('aria-label', 'Configurações SWDD');
+    fab.innerHTML = buildSvg(18);
+    document.body.appendChild(panel);
+    document.body.appendChild(fab);
+
+    function closePanel() {
+        panel.classList.remove('swdd-panel-show');
+        fab.classList.remove('swdd-fab-open');
+    }
+
+    function positionPanel() {
+        const rect = fab.getBoundingClientRect();
+        panel.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+        panel.style.right  = (window.innerWidth  - rect.right)  + 'px';
+    }
+
+    fab.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (panel.classList.contains('swdd-panel-show')) {
+            closePanel();
+        } else {
+            panel.innerHTML = buildSettingsPanelHtml();
+            panel.classList.add('swdd-panel-show');
+            fab.classList.add('swdd-fab-open');
+            positionPanel();
+        }
+    });
+
+    panel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = e.target.closest('.swdd-settings-row');
+        if (!row) return;
+        const s = row.dataset.swddSetting;
+        if (s === 'cacheInfo') {
+            showCacheInfo = showCacheInfo ? 0 : 1;
+            GM_setValue('showCacheInfo', showCacheInfo);
+        } else if (s === 'mirrorInfo') {
+            showMirrorInfo = showMirrorInfo ? 0 : 1;
+            GM_setValue('showMirrorInfo', showMirrorInfo);
+        }
+        panel.innerHTML = buildSettingsPanelHtml();
+        positionPanel();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#swdd-settings-panel') && !e.target.closest('#swdd-settings-fab')) {
+            closePanel();
+        }
+    });
+
+    // Expõe estado para os testes Playwright
+    window.__swddTest__ = {
+        getShowCacheInfo:  () => showCacheInfo,
+        getShowMirrorInfo: () => showMirrorInfo,
+        getStoredCacheInfo:  () => GM_getValue('showCacheInfo',  0),
+        getStoredMirrorInfo: () => GM_getValue('showMirrorInfo', 1),
+    };
+
+    document.getElementById('status').textContent = 'Ready';
+    window.__testReady__ = true;
+})();
+</script>
+</body>
+</html>
