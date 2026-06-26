@@ -5,8 +5,8 @@ export default [
     js.configs.recommended,
     // Testes Vitest
     {
-        files: ["Testes/*.test.js"],
-        ignores: ["Testes/*.playwright.test.js"],
+        files: ["Testes/**/*.test.js"],
+        ignores: ["Testes/**/*.playwright.test.js"],
         languageOptions: {
             ecmaVersion: 2020,
             sourceType: "commonjs",
@@ -28,7 +28,7 @@ export default [
     },
     // Testes Playwright
     {
-        files: ["Testes/*.playwright.test.js"],
+        files: ["Testes/**/*.playwright.test.js"],
         languageOptions: {
             ecmaVersion: 2020,
             sourceType: "commonjs",
@@ -36,7 +36,23 @@ export default [
         },
         rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off" },
     },
-    // Configs (playwright, vitest, eslint)
+    // Script principal (*.user.js) — browser + APIs do Tampermonkey/ViolentMonkey
+    {
+        files: ["**/*.user.js"],
+        languageOptions: {
+            ecmaVersion: 2020,
+            sourceType: "script",
+            globals: {
+                ...globals.browser,
+                GM_getValue:           "readonly",
+                GM_setValue:           "readonly",
+                GM_addStyle:           "readonly",
+                GM_xmlhttpRequest:     "readonly",
+                GM_openInTab:          "readonly",
+                GM_registerMenuCommand:"readonly",
+            },
+        },
+        rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off", "no-empty": ["error", { "allowEmptyCatch": true }] },
     {
         files: ["playwright.config.js", "vitest.config.js"],
         languageOptions: {
