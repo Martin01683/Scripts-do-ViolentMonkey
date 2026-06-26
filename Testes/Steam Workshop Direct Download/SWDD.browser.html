@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SWDD Browser Test Harness</title>
+</head>
+<body>
+
+<!-- ── Área de DOM para parseSteamHTMLDate ──────────────────────────────────── -->
+<div id="swdd-test-steam-detail" style="display:none">
+  <div class="detailsStatLeft">Posted</div>
+  <div class="detailsStatRight">1 Jan, 2023</div>
+  <div class="detailsStatLeft">Updated</div>
+  <div class="detailsStatRight">15 Jun, 2024 @ 3:00pm</div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// Reproduz as funções puras do script SWDD para testes em browser real
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Constantes ────────────────────────────────────────────────────────────────
+const STEAM_NO_DATE    = 'NO_DATE';
+const STEAM_FETCH_ERROR = 'FETCH_ERROR';
+
+// ── escapeHTML ────────────────────────────────────────────────────────────────
+function escapeHTML(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+    }[tag]));
+}
+
+// ── MonthMap (reprodução completa do Módulo 0.2) ──────────────────────────────
+const MonthMap = (() => {
+    const STEAM_LOCALES = [
+        'pt', 'pt-BR', 'en', 'es', 'es-419', 'fr', 'de', 'it',
+        'ru', 'uk', 'bg', 'pl', 'cs', 'ro', 'hu', 'el',
+        'nl', 'sv', 'da', 'no', 'fi', 'tr', 'id', 'ms', 'vi',
+        'th', 'zh-Hans', 'zh-Hant', 'ja', 'ko'
+    ];
+    const MANUAL = {
+        jan:0,january:0,janeiro:0,enero:0,janvier:0,januar:0,januari:0,janv:0,
+        gennaio:0,gen:0,ene:0,'январь':0,'янв':0,'січень':0,'січ':0,
+        'styczeń':0,sty:0,leden:0,led:0,ianuarie:0,ian:0,'január':0,
+        'ιανουαρίου':0,'ιαν':0,tammikuu:0,tammi:0,ocak:0,oca:0,
+        'มกราคม':0,'ม.ค':0,'一月':0,'1月':0,'1월':0,
+        february:1,fevereiro:1,febrero:1,februar:1,februari:1,fev:1,feb:1,
+        'février':1,'févr':1,febbraio:1,'февраль':1,'февр':1,'лютий':1,'лют':1,
+        luty:1,lut:1,'únor':1,'úno':1,februarie:1,'február':1,febr:1,
+        'φεβρουαρίου':1,'φεβ':1,helmikuu:1,helmi:1,'şubat':1,'şub':1,
+        'กุมภาพันธ์':1,'ก.พ':1,'二月':1,'2月':1,'2월':1,
+        march:2,'março':2,marzo:2,marts:2,mar:2,mars:2,'märz':2,'mär':2,
+        maart:2,mrt:2,'март':2,'березень':2,'бер':2,marzec:2,'březen':2,'bře':2,
+        martie:2,'március':2,'márc':2,'μαρτίου':2,'μαρ':2,maaliskuu:2,maalis:2,
+        mart:2,maret:2,mac:2,'มีนาคม':2,'มี.ค':2,'三月':2,'3月':2,'3월':2,
+        april:3,abril:3,apr:3,abr:3,avril:3,avr:3,aprile:3,'апрель':3,'апр':3,
+        'квітень':3,'квіт':3,'kwiecień':3,kwi:3,duben:3,dub:3,aprilie:3,
+        'április':3,'ápr':3,'απριλίου':3,'απρ':3,huhtikuu:3,huhti:3,nisan:3,nis:3,
+        'เมษายน':3,'เม.ย':3,'四月':3,'4月':3,'4월':3,
+        maio:4,may:4,mayo:4,mai:4,maggio:4,mag:4,'май':4,'травень':4,'трав':4,
+        maj:4,'květen':4,'kvě':4,'május':4,'máj':4,'μαΐου':4,'μαΐ':4,mei:4,
+        toukokuu:4,touko:4,'mayıs':4,'พฤษภาคม':4,'พ.ค':4,'五月':4,'5月':4,'5월':4,
+        june:5,junho:5,junio:5,juni:5,jun:5,juin:5,giugno:5,giu:5,'июнь':5,
+        'червень':5,'черв':5,czerwiec:5,cze:5,'červen':5,'čvn':5,iunie:5,iun:5,
+        'június':5,'jún':5,'ιουνίου':5,'ιουν':5,'kesäkuu':5,'kesä':5,
+        haziran:5,haz:5,'มิถุนายน':5,'มิ.ย':5,'六月':5,'6月':5,'6월':5,
+        july:6,julho:6,julio:6,juli:6,jul:6,juillet:6,juil:6,luglio:6,lug:6,
+        'июль':6,'липень':6,'лип':6,lipiec:6,lip:6,'červenec':6,'čvc':6,
+        iulie:6,iul:6,'július':6,'júl':6,'ιουλίου':6,'ιουλ':6,'юли':6,
+        'heinäkuu':6,'heinä':6,temmuz:6,tem:6,julai:6,'กรกฎาคม':6,'ก.ค':6,
+        '七月':6,'7月':6,'7월':6,
+        august:7,agosto:7,augustus:7,augusti:7,aug:7,ago:7,'août':7,
+        'август':7,'авг':7,'серпень':7,'серп':7,'sierpień':7,sie:7,srpen:7,srp:7,
+        augusztus:7,'αυγούστου':7,'αυγ':7,elokuu:7,elo:7,'ağustos':7,'ağu':7,
+        agustus:7,agu:7,ogos:7,ogo:7,'สิงหาคม':7,'ส.ค':7,'八月':7,'8月':7,'8월':7,
+        september:8,setembro:8,septiembre:8,septembre:8,settembre:8,set:8,sep:8,
+        sept:8,'сентябрь':8,'сент':8,'вересень':8,'вер':8,'wrzesień':8,wrz:8,
+        'září':8,'zář':8,septembrie:8,szeptember:8,szept:8,'σεπτεμβρίου':8,'σεπ':8,
+        syyskuu:8,syys:8,'eylül':8,eyl:8,'กันยายน':8,'ก.ย':8,'九月':8,'9月':8,'9월':8,
+        october:9,outubro:9,octubre:9,octobre:9,oktober:9,out:9,oct:9,okt:9,
+        ottobre:9,ott:9,'октябрь':9,'окт':9,'жовтень':9,'жовт':9,'październik':9,
+        'paź':9,'říjen':9,'říj':9,octombrie:9,'október':9,'οκτωβρίου':9,'οκτ':9,
+        lokakuu:9,loka:9,ekim:9,eki:9,'ตุลาคม':9,'ต.ค':9,'十月':9,'10月':9,'10월':9,
+        november:10,novembro:10,noviembre:10,novembre:10,nov:10,'ноябрь':10,'нояб':10,
+        'листопад':10,'лист':10,listopad:10,lis:10,noiembrie:10,'νοεμβρίου':10,'νοε':10,
+        marraskuu:10,marras:10,'kasım':10,kas:10,'พฤศจิกายน':10,'พ.ย':10,
+        '十一月':10,'11月':10,'11월':10,
+        december:11,dezembro:11,diciembre:11,dezember:11,dicembre:11,dec:11,dez:11,
+        dic:11,'décembre':11,'déc':11,'декабрь':11,'дек':11,'грудень':11,'груд':11,
+        'grudzień':11,gru:11,prosinec:11,pro:11,decembrie:11,'δεκεμβρίου':11,'δεκ':11,
+        desember:11,des:11,joulukuu:11,joulu:11,'aralık':11,ara:11,disember:11,dis:11,
+        'ธันวาคม':11,'ธ.ค':11,'十二月':11,'12月':11,'12월':11
+    };
+    let _cache = null;
+    return {
+        get() {
+            if (_cache) return _cache;
+            const intlMap = {};
+            try {
+                for (let m = 0; m < 12; m++) {
+                    const d = new Date(2024, m, 1);
+                    STEAM_LOCALES.forEach(locale => {
+                        ['long','short'].forEach(fmt => {
+                            try {
+                                const name = new Intl.DateTimeFormat(locale, { month: fmt }).format(d)
+                                    .toLowerCase().trim().replace(/[.,]$/, '');
+                                if (name && name.length >= 2) intlMap[name] = m;
+                            } catch(e) { /* ignore unsupported locale */ }
+                        });
+                    });
+                }
+            } catch(e) { /* Intl unavailable */ }
+            _cache = Object.assign({}, intlMap, MANUAL);
+            return _cache;
+        },
+        reset() { _cache = null; }
+    };
+})();
+
+// ── utils.parseSmodsDate ──────────────────────────────────────────────────────
+function parseSmodsDate(dateStr) {
+    if (!dateStr) return null;
+    dateStr = String(dateStr).trim();
+    let cleanStr = dateStr.replace(/\s+at\s+/i, ' ');
+    const match = cleanStr.match(/(\d{1,2})\s+([A-Za-z]{3,})(?:,?\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?/i);
+    if (match) {
+        const day = parseInt(match[1], 10);
+        const monthStr = match[2].toLowerCase().substring(0, 3);
+        let year = match[3] ? parseInt(match[3], 10) : new Date().getFullYear();
+        const month = MonthMap.get()[monthStr];
+        if (month !== undefined) {
+            let parsedDate, exact = false;
+            if (match[4] !== undefined && match[5] !== undefined) {
+                const hours = parseInt(match[4], 10);
+                const minutes = parseInt(match[5], 10);
+                parsedDate = new Date(Date.UTC(year, month, day, hours + 3, minutes, 0));
+                exact = true;
+            } else {
+                parsedDate = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+            }
+            if (!match[3] && parsedDate.getTime() > Date.now()) parsedDate.setUTCFullYear(year - 1);
+            return { date: parsedDate, exact };
+        }
+    }
+    const d1 = new Date(cleanStr);
+    if (!isNaN(d1.getTime())) {
+        if (!/\d{2}:\d{2}/.test(cleanStr)) { d1.setUTCHours(23, 59, 59, 999); return { date: d1, exact: false }; }
+        return { date: d1, exact: true };
+    }
+    return null;
+}
+
+// ── utils.parseInsaneDate ─────────────────────────────────────────────────────
+function parseInsaneDate(dateStr) {
+    if (!dateStr || dateStr.startsWith('0000-00-00')) return null;
+    const d = new Date(dateStr.replace(' ', 'T') + '+01:00');
+    return isNaN(d.getTime()) ? null : { date: d, exact: /\d{2}:\d{2}/.test(dateStr) };
+}
+
+// ── utils.parseInsaneGHDate ───────────────────────────────────────────────────
+function parseInsaneGHDate(dateStr) {
+    if (!dateStr) return null;
+    const match = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return null;
+    return { date: new Date(Date.UTC(match[1], match[2]-1, match[3], match[4]-1, match[5], match[6]||0)), exact: true };
+}
+
+// ── utils.getIdFromName ───────────────────────────────────────────────────────
+function getIdFromName(name) {
+    const match = String(name || '').match(/^\s*(\d{6,})/);
+    return match ? match[1] : null;
+}
+
+// ── utils.isUpToDate ──────────────────────────────────────────────────────────
+function isUpToDate(dateMirror, dateSteam) {
+    if (dateSteam === STEAM_NO_DATE || dateSteam === STEAM_FETCH_ERROR) return true;
+    if (!dateMirror) return false;
+    return Math.floor(dateMirror.getTime()/60000) >= Math.floor(dateSteam.getTime()/60000);
+}
+
+// ── utils.extractJsonArray ────────────────────────────────────────────────────
+function extractJsonArray(text, varName) {
+    try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return text;
+        if (parsed[varName]) return JSON.stringify(parsed[varName]);
+    } catch(e) { /* not JSON */ }
+    const regex = new RegExp(`(?:const|let|var)\\s+${varName}\\s*=\\s*\\[`);
+    const match = text.match(regex);
+    if (!match) return null;
+    const startIdx = match.index + match[0].length - 1;
+    let depth=0, inString=false, stringChar='';
+    for (let i=startIdx; i<text.length; i++) {
+        const char = text[i];
+        if (!inString && (char==='"'||char==="'")) { inString=true; stringChar=char; }
+        else if (inString && char===stringChar && text[i-1]!=='\\') { inString=false; }
+        else if (!inString) {
+            if (char==='[') depth++;
+            else if (char===']') { depth--; if (depth===0) return text.substring(startIdx, i+1); }
+        }
+    }
+    return null;
+}
+
+// ── utils.parseSteamHTMLDate (DOM-dependent) ──────────────────────────────────
+function parseSteamHTMLDate() {
+    const labels = document.querySelectorAll('.detailsStatLeft');
+    const values = document.querySelectorAll('.detailsStatRight');
+    let dateStr = '';
+    const updateKeywords = [
+        'updated','atualizado','última atualização','actualizado','mis à jour',
+        'aktualisiert','aggiornato','bijgewerkt','zaktualizowano','güncellendi',
+        'aktualizováno','opdateret','päivitetty','oppdatert','uppdaterad',
+        'frissítve','actualizat','diperbarui','cập nhật','обновлено',
+        'актуализирано','оновлено','ενημερώθηκε','更新','最後更新','업데이트됨','أحديث','อัปเดต',
+    ];
+    const publishKeywords = [
+        'posted','publicado','publié','veröffentlicht','pubblicato','geplaatst',
+        'opublikowano','yayınlandı','zveřejněno','lagt op','lähetetty','lagt ut',
+        'publicerad','közzétéve','postat','diposting','đăng','опубликовано',
+        'публикувано','опубліковано','αναρτήθηκε','发布','發佈','投稿','게시됨','نشر','โพสต์',
+    ];
+    labels.forEach((el, i) => {
+        const text = el.textContent.toLowerCase().trim();
+        const isUpdateRow  = updateKeywords.some(k => text.includes(k));
+        const isPublishRow = publishKeywords.some(k => text.includes(k));
+        if (isPublishRow || i === 1) { if (!dateStr) dateStr = values[i]?.textContent || ''; }
+        if (isUpdateRow || (labels.length >= 3 && i === 2)) { dateStr = values[i]?.textContent || ''; }
+    });
+    if (!dateStr) return null;
+    let year = new Date().getFullYear(), month=-1, day=-1, hours=12, minutes=0;
+    const timeMatch = dateStr.match(/(\d{1,2})[:時시]\s*(\d{2})/);
+    if (timeMatch) {
+        hours = parseInt(timeMatch[1], 10); minutes = parseInt(timeMatch[2], 10);
+        const isPM = /pm|p\.m\.|下午|午後|오후/i.test(dateStr);
+        const isAM = /am|a\.m\.|上午|午前|오전/i.test(dateStr);
+        if (isPM && hours < 12) hours += 12;
+        if (isAM && hours === 12) hours = 0;
+    }
+    const asianMatch = dateStr.match(/(?:(\d{4})\s*[年년])?\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]/);
+    if (asianMatch) {
+        if (asianMatch[1]) year = parseInt(asianMatch[1], 10);
+        month = parseInt(asianMatch[2], 10) - 1;
+        day = parseInt(asianMatch[3], 10);
+    } else {
+        let cleanStr = dateStr
+            .replace(/(^|\s)(@|at|às|de|в|о|у|den|u|kl)(?=\s|$)/gi, ' ')
+            .replace(/[.,/]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        const monthMap = MonthMap.get();
+        const parts = cleanStr.split(' ');
+        parts.forEach(p => {
+            if (/^\d{1,2}$/.test(p) && day===-1 && parseInt(p,10)<=31) { day = parseInt(p,10); }
+            else if (month===-1 && monthMap[p]!==undefined) month = monthMap[p];
+            else if (month===-1 && p.length>=3 && monthMap[p.substring(0,3)]!==undefined) month = monthMap[p.substring(0,3)];
+            else if (/^\d{4}$/.test(p)) year = parseInt(p,10);
+        });
+    }
+    if (day!==-1 && month!==-1) {
+        const finalDate = new Date(year, month, day, hours, minutes, 0);
+        if (finalDate.getTime() > Date.now() + 86400000) finalDate.setFullYear(year-1);
+        return { date: finalDate, isFallback: true };
+    }
+    return null;
+}
+
+// ── TemplateEngine — funções puras ────────────────────────────────────────────
+const t = { justNow: 'agora', minAgo: 'min atrás' };
+
+function formatCacheAge(ms) {
+    if (!ms || ms < 0 || isNaN(ms)) ms = 0;
+    const minutes = Math.floor(ms / 60000);
+    if (minutes < 1) return t.justNow;
+    return `${minutes} ${t.minAgo}`;
+}
+
+function formatTimeLeft(expTimestamp) {
+    if (!expTimestamp) return '0s';
+    const left = expTimestamp - Date.now();
+    if (left <= 0) return '0s';
+    const m = Math.floor(left / 60000);
+    const s = Math.floor((left % 60000) / 1000);
+    return `${m}m ${s}s`;
+}
+
+function formatTextWrap(text, maxChars=50) {
+    if (!text) return '';
+    return String(text).split(/<br\s*\/?>|\n/i).map(line => {
+        const raw = line.trim();
+        if (raw.length > maxChars && raw.includes(' ')) {
+            const words = raw.split(' ');
+            let cur=''; const lines=[];
+            for (const word of words) {
+                if (cur.length+word.length>maxChars && cur.length>0) { lines.push(escapeHTML(cur.trim())); cur=word+' '; }
+                else cur+=word+' ';
+            }
+            if (cur.trim()) lines.push(escapeHTML(cur.trim()));
+            return lines.join('<br>');
+        }
+        return escapeHTML(raw);
+    }).join('<br>');
+}
+
+// ── addOrUpdateMod ────────────────────────────────────────────────────────────
+function addOrUpdateMod(resultObj, id, link, parsedDateObj) {
+    const newDate = parsedDateObj ? parsedDateObj.date : null;
+    const current = resultObj[id];
+    if (!current || (newDate && (!current.date || newDate > current.date))) {
+        resultObj[id] = { link, date: newDate, exactTime: parsedDateObj ? parsedDateObj.exact : true };
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Expõe tudo via window.__SWDD__ para os testes Playwright
+// ════════════════════════════════════════════════════════════════════════════
+window.__SWDD__ = {
+    STEAM_NO_DATE,
+    STEAM_FETCH_ERROR,
+    escapeHTML,
+    MonthMap,
+    parseSmodsDate,
+    parseInsaneDate,
+    parseInsaneGHDate,
+    getIdFromName,
+    isUpToDate,
+    extractJsonArray,
+    parseSteamHTMLDate,
+    formatCacheAge,
+    formatTimeLeft,
+    formatTextWrap,
+    addOrUpdateMod,
+};
+
+window.__testReady__ = true;
+</script>
+</body>
+</html>
