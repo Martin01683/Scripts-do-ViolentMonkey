@@ -1945,16 +1945,7 @@
             const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, needsTopSep) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
-            // Barra de fechamento: quando há bodyHtml mas nenhuma seção vem após ele
-            // (mirrors e cache desabilitados pelo usuário), a borda-topo que a seção de
-            // mirrors normalmente fornece não existe — o tooltip termina visualmente
-            // "sem fechar". Adicionamos uma linha separadora discreta para manter a
-            // consistência visual independente do estado das configurações do usuário.
-            const closingBar = (bodyHtml && !mirrorCheckHtml && !cacheHtml)
-                ? '<div style="margin-top: 8px; border-top: 1px solid #3d4450;"></div>'
-                : '';
-
-            return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}${closingBar}`;
+            return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
         },
 
         /**
