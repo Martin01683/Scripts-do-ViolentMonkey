@@ -327,3 +327,40 @@ test('Posição: painel não se move em toggles sucessivos', async ({ page }) =>
 
     expect(bottomAfter).toBe(bottomBefore);
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// BLOCO 9: Identificação do script — subtítulo (opção ①)
+// Garante que o painel exibe o nome completo do script como subtítulo
+// logo abaixo do cabeçalho, sem interferir nas linhas de configuração.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('Subtítulo: existe e está visível quando o painel está aberto', async ({ page }) => {
+    await openPanel(page);
+    await expect(page.locator('.swdd-settings-subtitle')).toBeVisible();
+});
+
+test('Subtítulo: exibe o nome completo "Steam Workshop Direct Download"', async ({ page }) => {
+    await openPanel(page);
+    const text = await page.locator('.swdd-settings-subtitle').innerText();
+    expect(text.trim()).toBe('Steam Workshop Direct Download');
+});
+
+test('Subtítulo: aparece entre o cabeçalho e a primeira linha de configuração', async ({ page }) => {
+    await openPanel(page);
+    const headerBottom = await page.locator('.swdd-settings-header').evaluate(el => el.getBoundingClientRect().bottom);
+    const subtitleTop  = await page.locator('.swdd-settings-subtitle').evaluate(el => el.getBoundingClientRect().top);
+    const firstRowTop  = await page.locator('.swdd-settings-row').first().evaluate(el => el.getBoundingClientRect().top);
+    expect(subtitleTop).toBeGreaterThanOrEqual(headerBottom);
+    expect(firstRowTop).toBeGreaterThan(subtitleTop);
+});
+
+test('Subtítulo: não é uma linha de configuração (não tem data-swdd-setting)', async ({ page }) => {
+    await openPanel(page);
+    const attr = await page.locator('.swdd-settings-subtitle').getAttribute('data-swdd-setting');
+    expect(attr).toBeNull();
+});
+
+test('Subtítulo: não interfere na contagem de linhas de configuração', async ({ page }) => {
+    await openPanel(page);
+    await expect(page.locator('.swdd-settings-row')).toHaveCount(2);
+});

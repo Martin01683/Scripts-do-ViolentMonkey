@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.25.15
+// @version      26.06.26.01
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -2032,6 +2032,7 @@
         .swdd-toggle-switch::after { content: ''; position: absolute; width: 14px; height: 14px; background: #fff; border-radius: 50%; top: 2px; transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
         .swdd-toggle-switch.swdd-tog-on::after { left: 16px; }
         .swdd-toggle-switch.swdd-tog-off::after { left: 2px; }
+        .swdd-settings-subtitle { padding: 4px 12px 5px; font-size: 10px; color: #4d6680; font-family: "Motiva Sans", Arial, sans-serif; border-bottom: 1px solid #2a3340; }
     `);
 
     // ========================================================================
@@ -3296,6 +3297,7 @@
 
         return `
             <div class="swdd-settings-header">${SETTINGS_SVG}<span>${escapeHTML(settingsTitle)}</span></div>
+            <div class="swdd-settings-subtitle">Steam Workshop Direct Download</div>
             <div class="swdd-settings-row" data-swdd-setting="cacheInfo">
                 <span>${escapeHTML(cacheLabel)}</span>
                 <div class="swdd-toggle-switch ${cacheToggleClass}"></div>
