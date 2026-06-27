@@ -345,6 +345,13 @@ test('Subtítulo: exibe o nome completo "Steam Workshop Direct Download"', async
     expect(text.trim()).toBe('Steam Workshop Direct Download');
 });
 
+test('Subtítulo: tem a mesma cor do cabeçalho (#66c0f4)', async ({ page }) => {
+    await openPanel(page);
+    const color = await page.locator('.swdd-settings-subtitle').evaluate(el => getComputedStyle(el).color);
+    // rgb(102, 192, 244) = #66c0f4
+    expect(color).toBe('rgb(102, 192, 244)');
+});
+
 test('Subtítulo: aparece entre o cabeçalho e a primeira linha de configuração', async ({ page }) => {
     await openPanel(page);
     const headerBottom = await page.locator('.swdd-settings-header').evaluate(el => el.getBoundingClientRect().bottom);

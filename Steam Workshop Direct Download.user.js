@@ -2032,7 +2032,7 @@
         .swdd-toggle-switch::after { content: ''; position: absolute; width: 14px; height: 14px; background: #fff; border-radius: 50%; top: 2px; transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
         .swdd-toggle-switch.swdd-tog-on::after { left: 16px; }
         .swdd-toggle-switch.swdd-tog-off::after { left: 2px; }
-        .swdd-settings-subtitle { padding: 4px 12px 5px; font-size: 10px; color: #4d6680; font-family: "Motiva Sans", Arial, sans-serif; border-bottom: 1px solid #2a3340; }
+        .swdd-settings-subtitle { padding: 4px 12px 5px; font-size: 10px; color: #66c0f4; font-family: "Motiva Sans", Arial, sans-serif; border-bottom: 1px solid #2a3340; }
     `);
 
     // ========================================================================
