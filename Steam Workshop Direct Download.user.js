@@ -870,7 +870,7 @@
          * ele recebe o HTML cru com os horários ainda em UTC-3. O `hours + 3` aqui
          * replica manualmente exatamente o que o datetime-localize.min.js faria.
          *
-         *   Prova concreta (mod 3605677866 — "Better Road Builder", EU5, catalogue.smods.ru):
+         *   Prova concreta (mod 3605677866 — "Better Road Builder", Europa Universalis V, catalogue.smods.ru):
          *     HTML bruto do servidor  → "7 May at 01:30"         ← o que este parser lê
          *     Exibição no navegador   → "7 May at 04:30 UTC"     ← após datetime-localize.min.js
          *     API da Steam (UTC)      → 04:30 UTC                ← referência para comparação
