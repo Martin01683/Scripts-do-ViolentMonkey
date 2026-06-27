@@ -1945,7 +1945,16 @@
             const mirrorCheckHtml = (config.showMirrorCheck !== false) ? this.createMirrorCheckNotice(config.consultedMirrors, config.showBestAvailable !== false, needsTopSep) : '';
             const cacheHtml = (config.showCache !== false) ? this.createCacheBlock(config.creationTimeSteam, config.steamCacheExp, config.consultedMirrors) : '';
 
-            return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}`;
+            // Barra de fechamento: quando há bodyHtml mas nenhuma seção vem após ele
+            // (mirrors e cache desabilitados pelo usuário), a borda-topo que a seção de
+            // mirrors normalmente fornece não existe — o tooltip termina visualmente
+            // "sem fechar". Adicionamos uma linha separadora discreta para manter a
+            // consistência visual independente do estado das configurações do usuário.
+            const closingBar = (bodyHtml && !mirrorCheckHtml && !cacheHtml)
+                ? '<div style="margin-top: 8px; border-top: 1px solid #3d4450;"></div>'
+                : '';
+
+            return `${titleHtml}${bodyHtml}${mirrorCheckHtml}${cacheHtml}${closingBar}`;
         },
 
         /**
@@ -3397,7 +3406,15 @@
 
         // Atualiza o painel visualmente sem fechar
         settingsPanel.innerHTML = buildSettingsPanelHtml();
-        positionSettingsPanel();
+        // Nota: positionSettingsPanel() é intencionalmente omitido aqui.
+        // O painel tem altura fixa (o toggle só troca uma classe CSS, não
+        // altera o tamanho do conteúdo). Recalcular a posição causava um
+        // deslocamento para baixo na primeira interação: ao abrir o painel
+        // o FAB ainda está em hover (transform: translateY(-2px)), então
+        // getBoundingClientRect() retorna coords deslocadas; no primeiro
+        // clique no toggle o cursor já está sobre o painel (FAB sem hover),
+        // fazendo a posição calculada diferir em ~2 px do posicionamento
+        // inicial — o que o usuário percebia como a interface "descendo".
 
         // Fecha tooltip aberto (seu HTML já está desatualizado) e re-renderiza widgets
         closeTooltipIfOpen();

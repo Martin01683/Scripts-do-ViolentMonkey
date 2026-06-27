@@ -270,3 +270,60 @@ test('Estilo: painel tem fundo escuro (#171a21)', async ({ page }) => {
     // rgb(23, 26, 33) = #171a21
     expect(bg).toBe('rgb(23, 26, 33)');
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// BLOCO 8: Estabilidade de posicionamento (regressão Bug #2)
+// Garante que o painel NÃO se desloca ao clicar num toggle pela primeira vez.
+// Causa original: positionSettingsPanel() no handler de toggle usava
+// getBoundingClientRect() do FAB enquanto o hover transform já havia desfeito
+// (cursor estava sobre o painel, não o FAB), provocando deslocamento de ~2 px.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('Posição: painel não se move ao alternar Cache (primeira interação)', async ({ page }) => {
+    // Hover sobre o FAB para ativar o transform: translateY(-2px)
+    await page.hover(fab());
+    // Click abre o painel enquanto o FAB ainda está em hover (posição deslocada)
+    await page.click(fab());
+    await page.waitForSelector(`${panel()}.swdd-panel-show`);
+
+    const bottomBefore = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    // Move o cursor para o toggle (FAB perde o hover, transform some)
+    await page.hover(rowCache());
+    await page.click(rowCache());
+
+    const bottomAfter = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    expect(bottomAfter).toBe(bottomBefore);
+});
+
+test('Posição: painel não se move ao alternar Mirror (primeira interação)', async ({ page }) => {
+    await page.hover(fab());
+    await page.click(fab());
+    await page.waitForSelector(`${panel()}.swdd-panel-show`);
+
+    const bottomBefore = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    await page.hover(rowMirror());
+    await page.click(rowMirror());
+
+    const bottomAfter = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    expect(bottomAfter).toBe(bottomBefore);
+});
+
+test('Posição: painel não se move em toggles sucessivos', async ({ page }) => {
+    await page.hover(fab());
+    await page.click(fab());
+    await page.waitForSelector(`${panel()}.swdd-panel-show`);
+
+    const bottomBefore = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    // Alterna cache 3 vezes, mirror 2 vezes
+    for (let i = 0; i < 3; i++) await page.click(rowCache());
+    for (let i = 0; i < 2; i++) await page.click(rowMirror());
+
+    const bottomAfter = await page.evaluate(() => window.__swddTest__.getPanelBottom());
+
+    expect(bottomAfter).toBe(bottomBefore);
+});

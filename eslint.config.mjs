@@ -53,6 +53,7 @@ export default [
             },
         },
         rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off", "no-empty": ["error", { "allowEmptyCatch": true }] },
+    },
     {
         files: ["playwright.config.js", "vitest.config.js"],
         languageOptions: {

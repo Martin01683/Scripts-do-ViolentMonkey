@@ -280,3 +280,94 @@ describe('TemplateEngine.formatTextWrap', () => {
         });
     });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// createTooltip — closing bar (regressão Bug #1)
+// Verifica que a barra de fechamento é inserida quando o bodyHtml existe mas
+// ambas as seções (mirrors verificados e status do cache) estão desabilitadas.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Implementação mínima da lógica de closingBar extraída de createTooltip.
+ * Espelha exatamente o trecho corrigido do script para validação isolada.
+ *
+ * @param {string}  bodyHtml      - HTML do corpo do tooltip (pode ser vazio)
+ * @param {string}  mirrorCheckHtml - HTML da seção "Mirrors verificados" ('' = desabilitado)
+ * @param {string}  cacheHtml       - HTML da seção "Status do Cache" ('' = desabilitado)
+ * @returns {string} HTML completo do tooltip (sem o título, apenas para testar closingBar)
+ */
+function buildTooltipBody(bodyHtml, mirrorCheckHtml, cacheHtml) {
+    const closingBar = (bodyHtml && !mirrorCheckHtml && !cacheHtml)
+        ? '<div style="margin-top: 8px; border-top: 1px solid #3d4450;"></div>'
+        : '';
+    return `${bodyHtml}${mirrorCheckHtml}${cacheHtml}${closingBar}`;
+}
+
+const CLOSING_BAR_STYLE = 'border-top: 1px solid #3d4450';
+
+describe('createTooltip: closing bar (barra de fechamento inferior)', () => {
+    // ── Cenários onde a barra DEVE aparecer ──────────────────────────────────
+
+    test('adiciona barra quando bodyHtml existe e ambas as seções estão vazias', () => {
+        const html = buildTooltipBody('<div>body</div>', '', '');
+        expect(html).toContain(CLOSING_BAR_STYLE);
+    });
+
+    test('barra aparece ao fim do HTML (após o body)', () => {
+        const html = buildTooltipBody('<div>body</div>', '', '');
+        const barIdx  = html.indexOf(CLOSING_BAR_STYLE);
+        const bodyEnd = html.indexOf('</div>') + '</div>'.length;
+        expect(barIdx).toBeGreaterThan(bodyEnd);
+    });
+
+    // ── Cenários onde a barra NÃO deve aparecer ──────────────────────────────
+
+    test('NÃO adiciona barra quando mirrors estão presentes', () => {
+        const html = buildTooltipBody('<div>body</div>', '<div>mirrors</div>', '');
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+
+    test('NÃO adiciona barra quando cache está presente', () => {
+        const html = buildTooltipBody('<div>body</div>', '', '<div>cache</div>');
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+
+    test('NÃO adiciona barra quando mirrors e cache estão presentes', () => {
+        const html = buildTooltipBody('<div>body</div>', '<div>mirrors</div>', '<div>cache</div>');
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+
+    test('NÃO adiciona barra quando bodyHtml está vazio (tooltip sem corpo)', () => {
+        const html = buildTooltipBody('', '', '');
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+
+    test('NÃO adiciona barra quando bodyHtml está vazio mas seções existem', () => {
+        const html = buildTooltipBody('', '<div>mirrors</div>', '<div>cache</div>');
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+
+    // ── Verificação de estrutura ──────────────────────────────────────────────
+
+    test('a barra é um div com border-top (não introduz conteúdo textual)', () => {
+        const html = buildTooltipBody('<div>body</div>', '', '');
+        // Deve ser um <div> sem conteúdo de texto
+        const match = html.match(/<div style="[^"]*border-top[^"]*"><\/div>/);
+        expect(match).toBeTruthy();
+    });
+
+    test('ordem correta: body → mirrors → cache → barra (quando só body)', () => {
+        const html = buildTooltipBody('<div id="b">body</div>', '', '');
+        const bodyPos = html.indexOf('id="b"');
+        const barPos  = html.indexOf(CLOSING_BAR_STYLE);
+        expect(bodyPos).toBeLessThan(barPos);
+    });
+
+    test('ordem correta: body → mirrors → sem barra (mirrors presentes)', () => {
+        const html = buildTooltipBody('<div id="b">body</div>', '<div id="m">m</div>', '');
+        const bodyPos   = html.indexOf('id="b"');
+        const mirrorPos = html.indexOf('id="m"');
+        expect(bodyPos).toBeLessThan(mirrorPos);
+        expect(html).not.toContain(CLOSING_BAR_STYLE);
+    });
+});

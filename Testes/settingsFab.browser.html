@@ -55,7 +55,8 @@ window.__swddTest__ = {};
 
     /* ----- CSS ----- */
     GM_addStyle(`
-        #swdd-settings-fab{position:fixed!important;bottom:20px!important;right:20px!important;z-index:2147483646!important;border-radius:50%!important;width:36px!important;height:36px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;background:linear-gradient(to bottom,#343f4d 5%,#222933 95%)!important;color:#acb2b8!important;border:1px solid #455366!important;box-shadow:0 4px 12px rgba(0,0,0,0.6)!important;}
+        #swdd-settings-fab{position:fixed!important;bottom:20px!important;right:20px!important;z-index:2147483646!important;border-radius:50%!important;width:36px!important;height:36px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;background:linear-gradient(to bottom,#343f4d 5%,#222933 95%)!important;color:#acb2b8!important;border:1px solid #455366!important;box-shadow:0 4px 12px rgba(0,0,0,0.6)!important;transition:filter 0.2s,transform 0.2s,box-shadow 0.2s!important;}
+        #swdd-settings-fab:hover{filter:brightness(1.2)!important;transform:translateY(-2px)!important;box-shadow:0 6px 16px rgba(0,0,0,0.8)!important;}
         #swdd-settings-fab.swdd-fab-open{background:linear-gradient(to bottom,#3f5c1e 5%,#2c4015 95%)!important;color:#A3E33B!important;border-color:#5a852a!important;}
         #swdd-settings-panel{position:fixed!important;z-index:2147483647!important;background:#171a21!important;border:1px solid #3d4450!important;border-radius:6px!important;min-width:240px!important;box-shadow:0 8px 24px rgba(0,0,0,0.9)!important;overflow:hidden!important;display:none!important;}
         #swdd-settings-panel.swdd-panel-show{display:block!important;}
@@ -129,7 +130,9 @@ window.__swddTest__ = {};
             GM_setValue('showMirrorInfo', showMirrorInfo);
         }
         panel.innerHTML = buildSettingsPanelHtml();
-        positionPanel();
+        // positionPanel() removido intencionalmente: o toggle só troca uma classe CSS
+        // e não altera o tamanho do painel. Recalcular provocava deslocamento na
+        // primeira interação por causa do transform:translateY(-2px) do hover do FAB.
     });
 
     document.addEventListener('click', (e) => {
@@ -144,6 +147,7 @@ window.__swddTest__ = {};
         getShowMirrorInfo: () => showMirrorInfo,
         getStoredCacheInfo:  () => GM_getValue('showCacheInfo',  0),
         getStoredMirrorInfo: () => GM_getValue('showMirrorInfo', 1),
+        getPanelBottom: () => panel.style.bottom,
     };
 
     document.getElementById('status').textContent = 'Ready';
