@@ -271,7 +271,7 @@ test('parseInsaneGHDate: formato inválido retorna null', async ({ page }) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 test('getIdFromName: extrai 10 dígitos de início', async ({ page }) => {
-    expect(await sw(page, 'getIdFromName', '3746153385 My Mod')).toBe('3746153385');
+    expect(await sw(page, 'getIdFromName', '3605677866 My Mod')).toBe('3605677866');
 });
 
 test('getIdFromName: menos de 6 dígitos retorna null', async ({ page }) => {

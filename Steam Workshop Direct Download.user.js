@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.26.01
+// @version      26.06.26.02
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -870,11 +870,11 @@
          * ele recebe o HTML cru com os horários ainda em UTC-3. O `hours + 3` aqui
          * replica manualmente exatamente o que o datetime-localize.min.js faria.
          *
-         *   Prova concreta (mod 3746153385, observada no HTML real das duas páginas):
-         *     HTML bruto do servidor  → "18 Jun at 19:58"        ← o que este parser lê
-         *     Exibição no navegador   → "18 Jun at 22:58 UTC"    ← após datetime-localize.min.js
-         *     API da Steam (UTC)      → 22:58 UTC                ← referência para comparação
-         *     `hours + 3` = 19+3=22  → Date.UTC(..., 22, 58, 0) ✓
+         *   Prova concreta (mod 3605677866 — "Better Road Builder", EU5, catalogue.smods.ru):
+         *     HTML bruto do servidor  → "7 May at 01:30"         ← o que este parser lê
+         *     Exibição no navegador   → "7 May at 04:30 UTC"     ← após datetime-localize.min.js
+         *     API da Steam (UTC)      → 04:30 UTC                ← referência para comparação
+         *     `hours + 3` = 1+3=4    → Date.UTC(..., 4, 30, 0) ✓
          *
          * Isso é INTENCIONAL — sem esse ajuste o script concluiria, de forma errada,
          * que o mirror está 3 horas desatualizado em relação à Steam.

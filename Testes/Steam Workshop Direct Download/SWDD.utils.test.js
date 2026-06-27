@@ -727,8 +727,8 @@ describe('utils.getIdFromName', () => {
     });
 
     test('não inclui caracteres após os dígitos', () => {
-        const id = getIdFromName('3746153385 Some Mod Name Here');
-        expect(id).toBe('3746153385');
+        const id = getIdFromName('3605677866 Some Mod Name Here');
+        expect(id).toBe('3605677866');
         expect(id.length).toBe(10);
     });
 });
