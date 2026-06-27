@@ -24,6 +24,23 @@ window.GM_xmlhttpRequest = () => {};
 window.GM_openInTab      = () => {};
 window.GM_registerMenuCommand = () => {};
 
+/* GM_addValueChangeListener stub: armazena callbacks e permite disparar mudanças remotas */
+const _listeners = {};
+window.GM_addValueChangeListener = (key, fn) => {
+    if (!_listeners[key]) _listeners[key] = [];
+    _listeners[key].push(fn);
+};
+
+/**
+ * Simula uma mudança de valor vinda de outra aba (remote=true).
+ * Chamada pelos testes Playwright para verificar a sincronização entre abas.
+ */
+window.__triggerRemoteChange = (key, newVal) => {
+    const old = _store[key];
+    _store[key] = newVal;
+    (_listeners[key] || []).forEach(fn => fn(key, old, newVal, true));
+};
+
 // Funções auxiliares globais mínimas simuladas
 // (só o suficiente para inicializar o FAB sem rodar o script inteiro)
 window.__swddTest__ = {};
@@ -71,6 +88,10 @@ window.__swddTest__ = {};
         .swdd-toggle-switch.swdd-tog-off::after{left:2px;}
         .swdd-settings-subtitle{padding:4px 12px 5px;font-size:10px;color:#66c0f4;font-family:"Motiva Sans",Arial,sans-serif;border-bottom:1px solid #2a3340;}
     `);
+
+    /* ----- stubs das funções chamadas pelos listeners (inexistentes no harness) ----- */
+    function closeTooltipIfOpen() { /* sem tooltip no ambiente de teste isolado */ }
+    function reRenderAllWidgets()  { /* sem widgets no ambiente de teste isolado */ }
 
     /* ----- DOM ----- */
     function buildSettingsPanelHtml() {
@@ -143,6 +164,26 @@ window.__swddTest__ = {};
         }
     });
 
+    /* ----- sincronização entre abas (espelho do script principal) ----- */
+    GM_addValueChangeListener('showCacheInfo', function(name, oldVal, newVal, remote) {
+        if (!remote) return;
+        showCacheInfo = newVal;
+        closeTooltipIfOpen();
+        reRenderAllWidgets();
+        if (panel.classList.contains('swdd-panel-show')) {
+            panel.innerHTML = buildSettingsPanelHtml();
+        }
+    });
+    GM_addValueChangeListener('showMirrorInfo', function(name, oldVal, newVal, remote) {
+        if (!remote) return;
+        showMirrorInfo = newVal;
+        closeTooltipIfOpen();
+        reRenderAllWidgets();
+        if (panel.classList.contains('swdd-panel-show')) {
+            panel.innerHTML = buildSettingsPanelHtml();
+        }
+    });
+
     // Expõe estado para os testes Playwright
     window.__swddTest__ = {
         getShowCacheInfo:  () => showCacheInfo,
@@ -150,6 +191,7 @@ window.__swddTest__ = {};
         getStoredCacheInfo:  () => GM_getValue('showCacheInfo',  0),
         getStoredMirrorInfo: () => GM_getValue('showMirrorInfo', 1),
         getPanelBottom: () => panel.style.bottom,
+        triggerRemoteChange: window.__triggerRemoteChange,
     };
 
     document.getElementById('status').textContent = 'Ready';

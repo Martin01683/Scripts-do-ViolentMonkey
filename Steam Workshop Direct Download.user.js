@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.26.02
+// @version      26.06.27.01
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -13,6 +13,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addStyle
+// @grant        GM_addValueChangeListener
 // @connect      raw.githubusercontent.com
 // @connect      insane.x10.mx
 // @connect      api.steampowered.com
@@ -37,6 +38,41 @@
      */
     let showCacheInfo  = GM_getValue('showCacheInfo',  0);
     let showMirrorInfo = GM_getValue('showMirrorInfo', 1);
+
+    /**
+     * Sincronização entre abas: propaga mudanças de configuração feitas em outra aba
+     * para este contexto do script (outra janela/aba do navegador com a mesma origem).
+     *
+     * `remote === true` indica que a mudança veio de outro contexto (outra aba);
+     * mudanças locais têm `remote === false` e já são tratadas pelo handler de clique no
+     * painel — ignorá-las aqui evita double-render.
+     *
+     * Nota: `document.getElementById` é usado no lugar de `settingsPanel` (definido no
+     * Módulo 9) porque estes listeners são registrados antes que o elemento exista no DOM.
+     * Os callbacks só disparam de forma assíncrona (outra aba precisa alterar um valor),
+     * então o elemento sempre existe quando o callback é invocado. Caso haja corrida
+     * improvável, `getElementById` retorna `null` e o `&&` curto-circuita com segurança.
+     */
+    GM_addValueChangeListener('showCacheInfo', function(name, oldVal, newVal, remote) {
+        if (!remote) return;
+        showCacheInfo = newVal;
+        closeTooltipIfOpen();
+        reRenderAllWidgets();
+        var panelEl = document.getElementById('swdd-settings-panel');
+        if (panelEl && panelEl.classList.contains('swdd-panel-show')) {
+            panelEl.innerHTML = buildSettingsPanelHtml();
+        }
+    });
+    GM_addValueChangeListener('showMirrorInfo', function(name, oldVal, newVal, remote) {
+        if (!remote) return;
+        showMirrorInfo = newVal;
+        closeTooltipIfOpen();
+        reRenderAllWidgets();
+        var panelEl = document.getElementById('swdd-settings-panel');
+        if (panelEl && panelEl.classList.contains('swdd-panel-show')) {
+            panelEl.innerHTML = buildSettingsPanelHtml();
+        }
+    });
 
     /**
      * Utilitário de Segurança (Sanitização)

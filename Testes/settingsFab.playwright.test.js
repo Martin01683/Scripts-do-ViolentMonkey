@@ -371,3 +371,81 @@ test('Subtítulo: não interfere na contagem de linhas de configuração', async
     await openPanel(page);
     await expect(page.locator('.swdd-settings-row')).toHaveCount(2);
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// BLOCO 10: Sincronização entre abas (GM_addValueChangeListener)
+// Garante que mudanças de configuração feitas em outra aba/janela propagam-se
+// para este contexto via o mecanismo de listener remoto.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('Sync: mudança remota de showCacheInfo atualiza estado interno', async ({ page }) => {
+    // Estado inicial: showCacheInfo = 0 (padrão)
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 1));
+    const internal = await page.evaluate(() => window.__swddTest__.getShowCacheInfo());
+    expect(internal).toBe(1);
+});
+
+test('Sync: mudança remota de showMirrorInfo atualiza estado interno', async ({ page }) => {
+    // Estado inicial: showMirrorInfo = 1 (padrão)
+    await page.evaluate(() => window.__triggerRemoteChange('showMirrorInfo', 0));
+    const internal = await page.evaluate(() => window.__swddTest__.getShowMirrorInfo());
+    expect(internal).toBe(0);
+});
+
+test('Sync: mudança remota com painel aberto atualiza toggle de cache', async ({ page }) => {
+    await openPanel(page);
+    // showCacheInfo começa OFF (0) — trigger remoto para ON (1)
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 1));
+    const cls = await page.locator(`${rowCache()} .swdd-toggle-switch`).getAttribute('class');
+    expect(cls).toContain('swdd-tog-on');
+    expect(cls).not.toContain('swdd-tog-off');
+});
+
+test('Sync: mudança remota com painel aberto atualiza toggle de mirror', async ({ page }) => {
+    await openPanel(page);
+    // showMirrorInfo começa ON (1) — trigger remoto para OFF (0)
+    await page.evaluate(() => window.__triggerRemoteChange('showMirrorInfo', 0));
+    const cls = await page.locator(`${rowMirror()} .swdd-toggle-switch`).getAttribute('class');
+    expect(cls).toContain('swdd-tog-off');
+    expect(cls).not.toContain('swdd-tog-on');
+});
+
+test('Sync: mudança remota com painel fechado é refletida ao abrir', async ({ page }) => {
+    // Painel ainda fechado; simula outra aba ligando o cache
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 1));
+    // Abre o painel agora — deve mostrar cache ON
+    await openPanel(page);
+    const cls = await page.locator(`${rowCache()} .swdd-toggle-switch`).getAttribute('class');
+    expect(cls).toContain('swdd-tog-on');
+});
+
+test('Sync: mudança local não é tratada como remota pelo listener', async ({ page }) => {
+    await openPanel(page);
+    // Clique local: showCacheInfo 0 → 1
+    await page.click(rowCache());
+    const afterClick = await page.evaluate(() => window.__swddTest__.getShowCacheInfo());
+    expect(afterClick).toBe(1);
+    // Trigger remoto de retorno: 1 → 0 (confirma que o listener remoto ainda funciona)
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 0));
+    const afterRemote = await page.evaluate(() => window.__swddTest__.getShowCacheInfo());
+    expect(afterRemote).toBe(0);
+    const cls = await page.locator(`${rowCache()} .swdd-toggle-switch`).getAttribute('class');
+    expect(cls).toContain('swdd-tog-off');
+});
+
+test('Sync: múltiplas mudanças remotas preservam o estado final correto', async ({ page }) => {
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 1));
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 0));
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo', 1));
+    const internal = await page.evaluate(() => window.__swddTest__.getShowCacheInfo());
+    expect(internal).toBe(1);
+});
+
+test('Sync: mudanças remotas em cache e mirror são independentes', async ({ page }) => {
+    await page.evaluate(() => window.__triggerRemoteChange('showCacheInfo',  1));
+    await page.evaluate(() => window.__triggerRemoteChange('showMirrorInfo', 0));
+    const cache  = await page.evaluate(() => window.__swddTest__.getShowCacheInfo());
+    const mirror = await page.evaluate(() => window.__swddTest__.getShowMirrorInfo());
+    expect(cache).toBe(1);
+    expect(mirror).toBe(0);
+});
