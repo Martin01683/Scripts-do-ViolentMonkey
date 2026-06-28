@@ -38,6 +38,14 @@
      */
     let showCacheInfo  = GM_getValue('showCacheInfo',  0);
     let showMirrorInfo = GM_getValue('showMirrorInfo', 1);
+    /**
+     * Mapa de concorrência por mirror (per_mod): { [mirrorId]: N }
+     * Ausência de chave → usa DEFAULT_PER_MOD_CONCURRENT (definido no Módulo 9).
+     * Lido dinamicamente por PerModRequestLimiter.forMirror(id).drain()
+     * para que mudanças nas configurações se reflitam imediatamente nas
+     * filas em andamento, sem precisar recriar os limiters.
+     */
+    const mirrorConcurrency = GM_getValue('mirrorConcurrency', {});
 
     /**
      * Sincronização entre abas: propaga mudanças de configuração feitas em outra aba
@@ -58,20 +66,14 @@
         showCacheInfo = newVal;
         closeTooltipIfOpen();
         reRenderAllWidgets();
-        var panelEl = document.getElementById('swdd-settings-panel');
-        if (panelEl && panelEl.classList.contains('swdd-panel-show')) {
-            panelEl.innerHTML = buildSettingsPanelHtml();
-        }
+        rebuildCurrentPage();
     });
     GM_addValueChangeListener('showMirrorInfo', function(name, oldVal, newVal, remote) {
         if (!remote) return;
         showMirrorInfo = newVal;
         closeTooltipIfOpen();
         reRenderAllWidgets();
-        var panelEl = document.getElementById('swdd-settings-panel');
-        if (panelEl && panelEl.classList.contains('swdd-panel-show')) {
-            panelEl.innerHTML = buildSettingsPanelHtml();
-        }
+        rebuildCurrentPage();
     });
 
     /**
@@ -202,15 +204,18 @@
     // e o Mirror B preenchem seus slots em paralelo sem interferência mútua.
     // ========================================================================
     const PerModRequestLimiter = (() => {
-        const MAX_CONCURRENT = 10; // slots simultâneos por mirror
-        const limiters = {};      // { [mirrorId]: limiter }
+        const DEFAULT_CONCURRENT = 10; // usado quando não há configuração salva para o mirror
+        const limiters = {};           // { [mirrorId]: limiter }
 
-        function createLimiter() {
+        function createLimiter(mirrorId) {
             let running = 0;
             const queue = [];
 
             function drain() {
-                while (running < MAX_CONCURRENT && queue.length > 0) {
+                // Lê dinamicamente: mudanças salvas nas configurações aplicam-se
+                // imediatamente sem precisar recriar o limiter ou reiniciar a fila.
+                const max = (mirrorConcurrency[mirrorId] != null ? mirrorConcurrency[mirrorId] : DEFAULT_CONCURRENT);
+                while (running < max && queue.length > 0) {
                     const { task, resolve, reject } = queue.shift();
                     running++;
                     task()
@@ -226,6 +231,8 @@
                         drain();
                     });
                 },
+                /** Aciona drain() explicitamente ao alterar configurações (aplica novo limite imediatamente). */
+                drain,
                 /** Exposto apenas para testes — não usar em produção. */
                 _getRunning() { return running; },
                 _getQueueLength() { return queue.length; }
@@ -235,7 +242,7 @@
         return {
             /** Retorna (criando se necessário) o limiter do mirror especificado. */
             forMirror(mirrorId) {
-                if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter();
+                if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter(mirrorId);
                 return limiters[mirrorId];
             }
         };
@@ -1525,8 +1532,8 @@
     // Ícones e Emojis são aplicados separadamente pelo gerador de botões.
     // ========================================================================
     const translations = {
-        en: { checkingVersion: 'Checking Version...', mirrorError: 'Mirror Error', requestMod: 'Request Mod', modNotListed: 'Mod not listed. Click to request.', download: 'Download', downloadWarning: 'Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update', labelSteam: 'Steam:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', justNow: 'just now', minAgo: 'min ago', steamError: 'Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: 'Mirror Without Date', mirrorNoDateTip: 'Could not verify mirror version date.', clearCache: 'Clear Cache', cacheCooldown: 'Clear cache ({s}s)', idlePaused: 'Paused (Idle)', idleActive: 'Active', exactTimeWarn: 'Mirror missing time.<br>Precision uncertain.', modUnavailable: 'Mod Unavailable', modUnavailableTip: 'Not found in the mirrors', modUnavailableSubTip: 'No mirror site/forum found to request the addition of the mod', modNotListedSubTip: 'Read the site/forum rules before requesting', invalidLink: 'Invalid Link', invalidLinkTip: 'Mirror returned an invalid or unsafe link.', checkedMirrors: 'Mirrors checked:', bestAvailable: 'Best available version selected', requestUpdateTip: 'Read the site/forum rules before requesting', noForumTip: 'No mirror site/forum found to request updates for the mod.', clearCacheTip: 'Clears verification data and rechecks.', steamFallbackWarn: 'Steam API returned no date. Using Steam page data (Estimated).', steamTimeMismatch: 'Date discrepancy detected between Steam API and Steam page.', consoleStorageQuotaCleanup: 'LocalStorage quota exceeded. Running preventive cleanup...', consoleCacheWriteFailed: 'Critical failure writing to cache after cleanup.', consoleUnknownIcon: 'Unknown icon: "{name}"', consoleWidgetUpdateFailed: 'Failed to update widget after cache expiration:', consoleMirrorFallbackError: 'Fallback Error (Mirror: {name}):', consoleWidgetInjectError: 'Error injecting Steam widgets:', settingsTitle: 'Settings', toggleCacheInfo: 'Cache Status', toggleMirrorInfo: 'Verified Mirrors' },
-        pt: { checkingVersion: 'Verificando versão...', mirrorError: 'Erro no Mirror', requestMod: 'Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: 'Baixar', downloadWarning: 'Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização', labelSteam: 'Steam:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', justNow: 'agora', minAgo: 'min atrás', steamError: 'Não Verificado', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: 'Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', clearCache: 'Limpar Cache', cacheCooldown: 'Limpar cache ({s}s)', idlePaused: 'Pausado (Inativo)', idleActive: 'Ativo', exactTimeWarn: 'O mirror não contém hora.<br>Precisão incerta.', modUnavailable: 'Mod Indisponível', modUnavailableTip: 'Não encontrado nos mirrors', modUnavailableSubTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar a adição do mod.', modNotListedSubTip: 'Leia as regras do site/fórum antes de pedir', invalidLink: 'Link Inválido', invalidLinkTip: 'O mirror retornou um link inválido ou inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Melhor versão disponível selecionada', requestUpdateTip: 'Leia as regras do site/fórum antes de pedir', noForumTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar atualizações do mod.', clearCacheTip: 'Limpa os dados de verificação e refaz a checagem.', steamFallbackWarn: 'A API da Steam não retornou data. Usando dados da página da Steam (Estimado).', steamTimeMismatch: 'Diferença de data detectada entre a API da Steam e a página da Steam.', consoleStorageQuotaCleanup: 'LocalStorage atingiu o limite de cota. Executando limpeza preventiva...', consoleCacheWriteFailed: 'Falha crítica ao gravar no cache após limpeza.', consoleUnknownIcon: 'Ícone desconhecido: "{name}"', consoleWidgetUpdateFailed: 'Falha ao atualizar widget após expiração de cache:', consoleMirrorFallbackError: 'Erro de Fallback (Mirror: {name}):', consoleWidgetInjectError: 'Erro ao tentar injetar widgets da Steam:', settingsTitle: 'Configurações', toggleCacheInfo: 'Status do Cache', toggleMirrorInfo: 'Mirrors verificados' },
+        en: { checkingVersion: 'Checking Version...', mirrorError: 'Mirror Error', requestMod: 'Request Mod', modNotListed: 'Mod not listed. Click to request.', download: 'Download', downloadWarning: 'Download', modUpdated: 'MOD UP TO DATE', modOutdated: 'MOD OUTDATED', requestUpdate: 'Request Update', labelSteam: 'Steam:', labelCache: 'Cache Status:', cacheSteam: 'Steam:', justNow: 'just now', minAgo: 'min ago', steamError: 'Unverified', steamErrorTip: 'Steam API unreachable. Version not verified.', mirrorNoDate: 'Mirror Without Date', mirrorNoDateTip: 'Could not verify mirror version date.', clearCache: 'Clear Cache', cacheCooldown: 'Clear cache ({s}s)', idlePaused: 'Paused (Idle)', idleActive: 'Active', exactTimeWarn: 'Mirror missing time.<br>Precision uncertain.', modUnavailable: 'Mod Unavailable', modUnavailableTip: 'Not found in the mirrors', modUnavailableSubTip: 'No mirror site/forum found to request the addition of the mod', modNotListedSubTip: 'Read the site/forum rules before requesting', invalidLink: 'Invalid Link', invalidLinkTip: 'Mirror returned an invalid or unsafe link.', checkedMirrors: 'Mirrors checked:', bestAvailable: 'Best available version selected', requestUpdateTip: 'Read the site/forum rules before requesting', noForumTip: 'No mirror site/forum found to request updates for the mod.', clearCacheTip: 'Clears verification data and rechecks.', steamFallbackWarn: 'Steam API returned no date. Using Steam page data (Estimated).', steamTimeMismatch: 'Date discrepancy detected between Steam API and Steam page.', consoleStorageQuotaCleanup: 'LocalStorage quota exceeded. Running preventive cleanup...', consoleCacheWriteFailed: 'Critical failure writing to cache after cleanup.', consoleUnknownIcon: 'Unknown icon: "{name}"', consoleWidgetUpdateFailed: 'Failed to update widget after cache expiration:', consoleMirrorFallbackError: 'Fallback Error (Mirror: {name}):', consoleWidgetInjectError: 'Error injecting Steam widgets:', settingsTitle: 'Settings', toggleCacheInfo: 'Cache Status', toggleMirrorInfo: 'Verified Mirrors', sectionDisplay: 'Display', sectionNetwork: 'Network', concurrentConns: 'Simultaneous connections', fullDbHint: 'Full DB · 1 request', resetDefaults: 'Restore defaults' },
+        pt: { checkingVersion: 'Verificando versão...', mirrorError: 'Erro no Mirror', requestMod: 'Pedir Mod', modNotListed: 'Mod não listado. Clique para pedir.', download: 'Baixar', downloadWarning: 'Baixar', modUpdated: 'MOD ATUALIZADO', modOutdated: 'MOD DESATUALIZADO', requestUpdate: 'Pedir Atualização', labelSteam: 'Steam:', labelCache: 'Status do Cache:', cacheSteam: 'Steam:', justNow: 'agora', minAgo: 'min atrás', steamError: 'Não Verificado', steamErrorTip: 'Falha na API Steam. Versão não verificada.', mirrorNoDate: 'Mirror sem data', mirrorNoDateTip: 'Não foi possível verificar a versão do mirror.', clearCache: 'Limpar Cache', cacheCooldown: 'Limpar cache ({s}s)', idlePaused: 'Pausado (Inativo)', idleActive: 'Ativo', exactTimeWarn: 'O mirror não contém hora.<br>Precisão incerta.', modUnavailable: 'Mod Indisponível', modUnavailableTip: 'Não encontrado nos mirrors', modUnavailableSubTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar a adição do mod.', modNotListedSubTip: 'Leia as regras do site/fórum antes de pedir', invalidLink: 'Link Inválido', invalidLinkTip: 'O mirror retornou um link inválido ou inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Melhor versão disponível selecionada', requestUpdateTip: 'Leia as regras do site/fórum antes de pedir', noForumTip: 'Nenhum site/fórum dos mirrors foi encontrado para solicitar atualizações do mod.', clearCacheTip: 'Limpa os dados de verificação e refaz a checagem.', steamFallbackWarn: 'A API da Steam não retornou data. Usando dados da página da Steam (Estimado).', steamTimeMismatch: 'Diferença de data detectada entre a API da Steam e a página da Steam.', consoleStorageQuotaCleanup: 'LocalStorage atingiu o limite de cota. Executando limpeza preventiva...', consoleCacheWriteFailed: 'Falha crítica ao gravar no cache após limpeza.', consoleUnknownIcon: 'Ícone desconhecido: "{name}"', consoleWidgetUpdateFailed: 'Falha ao atualizar widget após expiração de cache:', consoleMirrorFallbackError: 'Erro de Fallback (Mirror: {name}):', consoleWidgetInjectError: 'Erro ao tentar injetar widgets da Steam:', settingsTitle: 'Configurações', toggleCacheInfo: 'Status do Cache', toggleMirrorInfo: 'Mirrors verificados', sectionDisplay: 'Exibição', sectionNetwork: 'Rede', concurrentConns: 'Conexões simultâneas', fullDbHint: 'Banco completo · 1 requisição', resetDefaults: 'Restaurar padrões' },
         es: { checkingVersion: 'Comprobando versión...', mirrorError: 'Error en Mirror', requestMod: 'Pedir mod', modNotListed: 'Mod no listado. Haz clic para pedirlo.', download: 'Descargar', downloadWarning: 'Descargar', modUpdated: 'MOD ACTUALIZADO', modOutdated: 'MOD DESACTUALIZADO', requestUpdate: 'Pedir actualización', labelSteam: 'Steam:', labelCache: 'Estado del caché:', cacheSteam: 'Steam:', justNow: 'ahora', minAgo: 'min atrás', steamError: 'No verificado', steamErrorTip: 'Fallo en la API de Steam. Versión no verificada.', mirrorNoDate: 'Mirror sin fecha', mirrorNoDateTip: 'No se pudo verificar la versión del mirror.', clearCache: 'Borrar caché', cacheCooldown: 'Borrar caché ({s}s)', idlePaused: 'Pausado (Inactivo)', idleActive: 'Activo', exactTimeWarn: 'Mirror sin hora.<br>Precisión incierta.', modUnavailable: 'Mod no disponible', modUnavailableTip: 'No encontrado en los mirrors', modUnavailableSubTip: 'No se encontró ningún sitio/foro de mirrors para solicitar la adición del mod', modNotListedSubTip: 'Lee las reglas del sitio/foro antes de pedir', invalidLink: 'Enlace Inválido', invalidLinkTip: 'El mirror devolvió un enlace inválido o inseguro.', checkedMirrors: 'Mirrors verificados:', bestAvailable: 'Mejor versión disponible seleccionada', requestUpdateTip: 'Lee las reglas del sitio/foro antes de pedir', noForumTip: 'No se encontró ningún sitio/foro de mirrors para solicitar actualizaciones del mod.', clearCacheTip: 'Borra los datos de verificación y vuelve a comprobar.', steamFallbackWarn: 'La API de Steam no devolvió fecha. Usando datos de página de Steam (Estimado).', steamTimeMismatch: 'Discrepancia de fecha detectada entre la API de Steam y la página de Steam.', consoleStorageQuotaCleanup: 'LocalStorage alcanzó el límite de cuota. Ejecutando limpieza preventiva...', consoleCacheWriteFailed: 'Fallo crítico al escribir en caché tras la limpieza.', consoleUnknownIcon: 'Icono desconocido: "{name}"', consoleWidgetUpdateFailed: 'Error al actualizar el widget tras la expiración del caché:', consoleMirrorFallbackError: 'Error de Fallback (Mirror: {name}):', consoleWidgetInjectError: 'Error al inyectar widgets de Steam:', settingsTitle: 'Configuración', toggleCacheInfo: 'Estado de caché', toggleMirrorInfo: 'Mirrors verificados' },
         fr: { checkingVersion: 'Vérification de la version...', mirrorError: 'Erreur Mirror', requestMod: 'Demander le mod', modNotListed: 'Mod non listé. Cliquez pour le demander.', download: 'Télécharger', downloadWarning: 'Télécharger', modUpdated: 'MOD À JOUR', modOutdated: 'MOD OBSOLÈTE', requestUpdate: 'Demander une mise à jour', labelSteam: 'Steam:', labelCache: 'État du cache:', cacheSteam: 'Steam:', justNow: 'à l\'instant', minAgo: 'min', steamError: 'Non vérifié', steamErrorTip: 'Erreur de l\'API Steam. Version non vérifiée.', mirrorNoDate: 'Mirror sans date', mirrorNoDateTip: 'Impossible de vérifier la version du mirror.', clearCache: 'Vider le cache', cacheCooldown: 'Vider ({s}s)', idlePaused: 'En pause (Inactif)', idleActive: 'Actif', exactTimeWarn: 'Heure manquante dans le mirror.<br>Précision incertaine.', modUnavailable: 'Mod indisponible', modUnavailableTip: 'Introuvable dans les mirrors', modUnavailableSubTip: 'Aucun site/forum de mirrors trouvé pour demander l\'ajout du mod', modNotListedSubTip: 'Lisez les règles du site/forum avant de faire une demande', invalidLink: 'Lien invalide', invalidLinkTip: 'Le mirror a renvoyé un lien invalide ou non sécurisé.', checkedMirrors: 'Mirrors vérifiés:', bestAvailable: 'Meilleure version disponible sélectionnée', requestUpdateTip: 'Lisez les règles du site/forum avant de faire une demande', noForumTip: "Aucun site/forum de mirrors trouvé pour demander des mises à jour du mod.", clearCacheTip: 'Efface les données de vérification et relance la vérification.', steamFallbackWarn: "L'API de Steam n'a pas renvoyé de date. Données de la page Steam utilisées. (Estimé)", steamTimeMismatch: "Différence de date détectée entre l'API de Steam et la page Steam.", consoleStorageQuotaCleanup: 'Quota LocalStorage dépassé. Nettoyage préventif en cours...', consoleCacheWriteFailed: "Échec critique lors de l'écriture dans le cache après nettoyage.", consoleUnknownIcon: 'Icône inconnue : "{name}"', consoleWidgetUpdateFailed: 'Échec de la mise à jour du widget après expiration du cache :', consoleMirrorFallbackError: 'Erreur de Fallback (Mirror : {name}) :', consoleWidgetInjectError: "Erreur lors de l'injection des widgets Steam :", settingsTitle: 'Paramètres', toggleCacheInfo: 'État du cache', toggleMirrorInfo: 'Mirrors vérifiés' },
         de: { checkingVersion: 'Version wird geprüft...', mirrorError: 'Mirror-Fehler', requestMod: 'Mod anfragen', modNotListed: 'Mod nicht gelistet. Zum Anfragen klicken.', download: 'Herunterladen', downloadWarning: 'Herunterladen', modUpdated: 'MOD AKTUELL', modOutdated: 'MOD VERALTET', requestUpdate: 'Update anfragen', labelSteam: 'Steam:', labelCache: 'Cache-Status:', cacheSteam: 'Steam:', justNow: 'gerade eben', minAgo: 'Min. her', steamError: 'Nicht verifiziert', steamErrorTip: 'Steam API nicht erreichbar. Version nicht verifiziert.', mirrorNoDate: 'Mirror ohne Datum', mirrorNoDateTip: 'Mirror-Version konnte nicht verifiziert werden.', clearCache: 'Cache leeren', cacheCooldown: 'Cache leeren ({s}s)', idlePaused: 'Pausiert (Inaktiv)', idleActive: 'Aktiv', exactTimeWarn: 'Mirror ohne Uhrzeit.<br>Präzision ungewiss.', modUnavailable: 'Mod nicht verfügbar', modUnavailableTip: 'Nicht in den Mirrors gefunden', modUnavailableSubTip: 'Keine Mirror-Seite/Forum gefunden, um die Hinzufügung des Mods anzufragen', modNotListedSubTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', invalidLink: 'Ungültiger Link', invalidLinkTip: 'Der Mirror hat einen ungültigen oder unsicheren Link zurückgegeben.', checkedMirrors: 'Überprüfte Mirrors:', bestAvailable: 'Beste verfügbare Version ausgewählt', requestUpdateTip: 'Lies die Regeln der Seite/des Forums, bevor du eine Anfrage stellst', noForumTip: 'Keine Mirror-Seite/Forum gefunden, um Updates für den Mod anzufragen.', clearCacheTip: 'Löscht die Überprüfungsdaten und prüft erneut.', steamFallbackWarn: 'Steam API lieferte kein Datum. Steam-Seitendaten verwendet. (Geschätzt)', steamTimeMismatch: 'Datumsunterschied zwischen Steam API und Steam-Seite erkannt.', consoleStorageQuotaCleanup: 'LocalStorage-Kontingent erschöpft. Präventive Bereinigung wird ausgeführt...', consoleCacheWriteFailed: 'Kritischer Fehler beim Schreiben in den Cache nach der Bereinigung.', consoleUnknownIcon: 'Unbekanntes Symbol: "{name}"', consoleWidgetUpdateFailed: 'Fehler beim Aktualisieren des Widgets nach Cache-Ablauf:', consoleMirrorFallbackError: 'Fallback-Fehler (Mirror: {name}):', consoleWidgetInjectError: 'Fehler beim Einbetten der Steam-Widgets:', settingsTitle: 'Einstellungen', toggleCacheInfo: 'Cache-Status', toggleMirrorInfo: 'Geprüfte Mirrors' },
@@ -1699,6 +1706,20 @@
         chevronDown: {
             paths: ['m6 9 6 6 6-6'],
             strokeWidth: 2
+        },
+
+        // Lucide: chevron-right
+        // Uso: seta de navegação para sub-páginas no painel de configurações
+        chevronRight: {
+            paths: ['m9 18 6-6-6-6'],
+            strokeWidth: 2.5
+        },
+
+        // Lucide: chevron-left
+        // Uso: botão "voltar" nas sub-páginas do painel de configurações
+        chevronLeft: {
+            paths: ['m15 18-6-6 6-6'],
+            strokeWidth: 2.5
         },
 
         // Lucide: settings-2
@@ -2133,6 +2154,31 @@
         .swdd-toggle-switch.swdd-tog-on::after { left: 16px; }
         .swdd-toggle-switch.swdd-tog-off::after { left: 2px; }
         .swdd-settings-subtitle { padding: 4px 12px 5px; font-size: 10px; color: #66c0f4; font-family: "Motiva Sans", Arial, sans-serif; border-bottom: 1px solid #2a3340; }
+        .swdd-settings-section { padding: 5px 12px 3px; font-size: 10px; color: #6e7a8a; text-transform: uppercase; letter-spacing: 0.08em; border-top: 1px solid #3d4450; margin-top: 2px; font-family: "Motiva Sans", Arial, sans-serif; }
+        .swdd-settings-nav-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; color: #acb2b8; font-family: "Motiva Sans", Arial, sans-serif; transition: background 0.15s; user-select: none; -webkit-user-select: none; }
+        .swdd-settings-nav-row:hover { background: #3d4450 !important; color: #fff !important; }
+        .swdd-settings-nav-label { font-size: 12px; color: #c6d4df; }
+        .swdd-settings-nav-sub { font-size: 10px; color: #6e7a8a; margin-top: 2px; }
+        .swdd-settings-back { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid #3d4450; cursor: pointer; color: #c6d4df; font-size: 13px; font-weight: 600; font-family: "Motiva Sans", Arial, sans-serif; transition: background 0.15s; user-select: none; -webkit-user-select: none; }
+        .swdd-settings-back:hover { background: #3d4450 !important; }
+        .swdd-mirror-row { padding: 10px 12px; border-bottom: 1px solid #2a3340; font-family: "Motiva Sans", Arial, sans-serif; }
+        .swdd-mirror-row:last-of-type { border-bottom: none; }
+        .swdd-mirror-name-row { display: flex; align-items: center; justify-content: space-between; }
+        .swdd-mirror-conc-row { display: flex; align-items: center; justify-content: space-between; margin-top: 7px; }
+        .swdd-mirror-label { font-size: 12px; color: #c6d4df; font-weight: 600; }
+        .swdd-mirror-hint { font-size: 10px; color: #6e7a8a; margin-top: 3px; }
+        .swdd-conc-label { font-size: 11px; color: #6e7a8a; }
+        .swdd-type-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-family: monospace; letter-spacing: 0.02em; flex-shrink: 0; }
+        .swdd-badge-per  { background: #1a3a5c; color: #66b4ef; border: 1px solid #0d4e7a; }
+        .swdd-badge-full { background: #1e3a26; color: #6dbf70; border: 1px solid #2a5a30; }
+        .swdd-stepper { display: flex; align-items: center; gap: 4px; }
+        .swdd-stepper-btn { width: 20px; height: 20px; border: 1px solid #3d4450; border-radius: 3px; background: #2a3240; color: #c6d4df; padding: 0; flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; font-family: Arial, sans-serif; user-select: none; -webkit-user-select: none; }
+        .swdd-stepper-btn:not([disabled]):hover { background: #3d4450; }
+        .swdd-stepper-btn[disabled] { opacity: 0.4; cursor: default; }
+        .swdd-stepper-val { min-width: 24px; text-align: center; font-size: 12px; color: #c6d4df; font-variant-numeric: tabular-nums; }
+        .swdd-reset-row { border-top: 1px solid #3d4450; padding: 8px 12px; }
+        .swdd-reset-btn { display: flex; align-items: center; gap: 6px; cursor: pointer; color: #c9a227; font-size: 11px; font-family: "Motiva Sans", Arial, sans-serif; background: none; border: none; padding: 0; user-select: none; -webkit-user-select: none; }
+        .swdd-reset-btn:hover { color: #e0b83a !important; }
     `);
 
     // ========================================================================
@@ -3502,30 +3548,61 @@
     runInjectors(); // Primeira injeção síncrona manual ao carregar
 
     // ========================================================================
+    // ========================================================================
     // MÓDULO 9: BOTÃO FLUTUANTE DE CONFIGURAÇÕES (FAB)
     // Botão fixo no canto inferior direito que abre um painel de configurações
     // inline, seguindo o mesmo padrão visual (cores, fontes e estilos) do
     // restante do script. Substitui o GM_registerMenuCommand anterior.
+    //
+    // O painel tem duas "páginas" navegáveis:
+    //   "main"    — toggles de exibição + entrada para a sub-página Mirrors
+    //   "mirrors" — lista de mirrors do jogo detectado com controle de
+    //               concorrência (stepper) para mirrors do tipo per_mod
     // ========================================================================
 
+    /** Concorrência padrão por mirror quando não há configuração salva. */
+    const DEFAULT_PER_MOD_CONCURRENT = 10;
+
+    /** Página atualmente exibida no painel: 'main' | 'mirrors' */
+    let settingsPanelPage = 'main';
+
     /**
-     * Reconstrói o HTML interno do painel de configurações refletindo o estado
-     * atual de showCacheInfo e showMirrorInfo. Chamado sempre que o painel é
-     * aberto ou após alternar uma opção.
+     * Re-constrói o HTML da página atual do painel de configurações se ele
+     * estiver aberto. Chamado por mudanças remotas (cross-tab) e por ações
+     * que alteram estado sem trocar de página (ex.: toggle em outra aba).
      */
-    function buildSettingsPanelHtml() {
-        const settingsTitle  = t.settingsTitle  || 'Configurações';
-        const cacheLabel     = t.toggleCacheInfo  || t.labelCache  || 'Status do Cache';
-        const mirrorLabel    = t.toggleMirrorInfo || t.checkedMirrors || 'Mirrors verificados';
+    function rebuildCurrentPage() {
+        const panelEl = document.getElementById('swdd-settings-panel');
+        if (!panelEl || !panelEl.classList.contains('swdd-panel-show')) return;
+        panelEl.innerHTML = settingsPanelPage === 'mirrors' ? buildMirrorsPageHtml() : buildMainPageHtml();
+    }
+
+    /**
+     * Constrói o HTML da página principal do painel (toggles de exibição +
+     * navegação para Mirrors + botão de restaurar padrões desta página).
+     */
+    function buildMainPageHtml() {
+        const settingsTitle  = t.settingsTitle   || 'Configurações';
+        const cacheLabel     = t.toggleCacheInfo  || 'Status do Cache';
+        const mirrorLabel    = t.toggleMirrorInfo || 'Mirrors verificados';
+        const secDisplay     = t.sectionDisplay   || 'Exibição';
+        const secNetwork     = t.sectionNetwork   || 'Rede';
+        const resetText      = t.resetDefaults    || 'Restaurar padrões';
 
         const cacheToggleClass  = showCacheInfo  ? 'swdd-tog-on' : 'swdd-tog-off';
         const mirrorToggleClass = showMirrorInfo ? 'swdd-tog-on' : 'swdd-tog-off';
 
-        const SETTINGS_SVG = SvgIcon.build('settings', { size: 14, style: 'display:inline-block;vertical-align:middle;flex-shrink:0;' });
+        const SETTINGS_SVG    = SvgIcon.build('settings',     { size: 14, style: 'display:inline-block;vertical-align:middle;flex-shrink:0;' });
+        const CHEVRON_SVG     = SvgIcon.build('chevronRight', { size: 12, style: 'color:#6e7a8a;flex-shrink:0;' });
+
+        const total  = GAME.mirrors.length;
+        const perMod = GAME.mirrors.filter(m => m.type === 'per_mod').length;
+        const sub    = `${total} mirror${total !== 1 ? 's' : ''} · ${perMod} ${t.sectionNetwork ? escapeHTML(t.concurrentConns ? 'configurável' + (perMod !== 1 ? 'is' : '') : 'configurável') : 'configurável'}`;
 
         return `
             <div class="swdd-settings-header">${SETTINGS_SVG}<span>${escapeHTML(settingsTitle)}</span></div>
             <div class="swdd-settings-subtitle">Steam Workshop Direct Download</div>
+            <div class="swdd-settings-section">${escapeHTML(secDisplay)}</div>
             <div class="swdd-settings-row" data-swdd-setting="cacheInfo">
                 <span>${escapeHTML(cacheLabel)}</span>
                 <div class="swdd-toggle-switch ${cacheToggleClass}"></div>
@@ -3533,6 +3610,71 @@
             <div class="swdd-settings-row" data-swdd-setting="mirrorInfo">
                 <span>${escapeHTML(mirrorLabel)}</span>
                 <div class="swdd-toggle-switch ${mirrorToggleClass}"></div>
+            </div>
+            <div class="swdd-settings-section">${escapeHTML(secNetwork)}</div>
+            <div class="swdd-settings-nav-row" data-swdd-action="nav-mirrors">
+                <div>
+                    <div class="swdd-settings-nav-label">Mirrors</div>
+                    <div class="swdd-settings-nav-sub">${sub}</div>
+                </div>
+                ${CHEVRON_SVG}
+            </div>
+            <div class="swdd-reset-row">
+                <button class="swdd-reset-btn" data-swdd-action="reset">↺ ${escapeHTML(resetText)}</button>
+            </div>
+        `;
+    }
+
+    /**
+     * Constrói o HTML da sub-página Mirrors: botão voltar, lista de mirrors
+     * do jogo detectado (badge de tipo, stepper de concorrência para per_mod,
+     * hint informativo para full_db) e botão de restaurar padrões desta página.
+     */
+    function buildMirrorsPageHtml() {
+        const CHEVRON_LEFT_SVG = SvgIcon.build('chevronLeft', { size: 12, style: 'flex-shrink:0;' });
+        const concLabel  = t.concurrentConns || 'Conexões simultâneas';
+        const fullHint   = t.fullDbHint      || 'Banco completo · 1 requisição';
+        const resetText  = t.resetDefaults   || 'Restaurar padrões';
+
+        const mirrorsHtml = GAME.mirrors.map(m => {
+            const badgeClass = m.type === 'per_mod' ? 'swdd-badge-per' : 'swdd-badge-full';
+            const badgeText  = m.type === 'per_mod' ? 'per_mod' : 'full_db';
+
+            let controlHtml;
+            if (m.type === 'per_mod') {
+                const val  = mirrorConcurrency[m.id] != null ? mirrorConcurrency[m.id] : DEFAULT_PER_MOD_CONCURRENT;
+                const min  = 1;
+                const max  = 20;
+                controlHtml = `
+                    <div class="swdd-mirror-conc-row">
+                        <span class="swdd-conc-label">${escapeHTML(concLabel)}</span>
+                        <div class="swdd-stepper">
+                            <button class="swdd-stepper-btn" data-swdd-action="stepper" data-mirror-id="${escapeHTML(m.id)}" data-step="-1" ${val <= min ? 'disabled' : ''}>−</button>
+                            <span class="swdd-stepper-val">${val}</span>
+                            <button class="swdd-stepper-btn" data-swdd-action="stepper" data-mirror-id="${escapeHTML(m.id)}" data-step="1"  ${val >= max ? 'disabled' : ''}>+</button>
+                        </div>
+                    </div>`;
+            } else {
+                controlHtml = `<div class="swdd-mirror-hint">${escapeHTML(fullHint)}</div>`;
+            }
+
+            return `
+                <div class="swdd-mirror-row">
+                    <div class="swdd-mirror-name-row">
+                        <span class="swdd-mirror-label">${escapeHTML(m.name)}</span>
+                        <span class="swdd-type-badge ${badgeClass}">${badgeText}</span>
+                    </div>
+                    ${controlHtml}
+                </div>`;
+        }).join('');
+
+        return `
+            <div class="swdd-settings-back" data-swdd-action="nav-back">
+                ${CHEVRON_LEFT_SVG}<span>Mirrors</span>
+            </div>
+            ${mirrorsHtml}
+            <div class="swdd-reset-row">
+                <button class="swdd-reset-btn" data-swdd-action="reset">↺ ${escapeHTML(resetText)}</button>
             </div>
         `;
     }
@@ -3592,7 +3734,7 @@
         settingsPanel.style.right  = right  + 'px';
     }
 
-    // Clique no FAB: abre/fecha o painel
+    // Clique no FAB: abre/fecha o painel (sempre começa na página principal)
     settingsFab.addEventListener('click', (e) => {
         e.stopPropagation();
         closeUI(); // Fecha dropdown e tooltip se abertos
@@ -3600,20 +3742,76 @@
         if (settingsPanel.classList.contains('swdd-panel-show')) {
             settingsPanel.classList.remove('swdd-panel-show');
             settingsFab.classList.remove('swdd-fab-open');
+            settingsPanelPage = 'main'; // reseta para a próxima abertura
         } else {
-            settingsPanel.innerHTML = buildSettingsPanelHtml();
+            settingsPanelPage = 'main';
+            settingsPanel.innerHTML = buildMainPageHtml();
             settingsPanel.classList.add('swdd-panel-show');
             settingsFab.classList.add('swdd-fab-open');
             positionSettingsPanel();
         }
     });
 
-    // Clique num item de configuração dentro do painel
+    // Clique dentro do painel de configurações (delegação de eventos)
     settingsPanel.addEventListener('click', (e) => {
         e.stopPropagation();
+
+        // ── Navegação: main → mirrors ────────────────────────────────────
+        if (e.target.closest('[data-swdd-action="nav-mirrors"]')) {
+            settingsPanelPage = 'mirrors';
+            settingsPanel.innerHTML = buildMirrorsPageHtml();
+            positionSettingsPanel(); // recalcula: a página de mirrors é mais alta
+            return;
+        }
+
+        // ── Navegação: mirrors → main ────────────────────────────────────
+        if (e.target.closest('[data-swdd-action="nav-back"]')) {
+            settingsPanelPage = 'main';
+            settingsPanel.innerHTML = buildMainPageHtml();
+            positionSettingsPanel();
+            return;
+        }
+
+        // ── Restaurar padrões (apenas da página atual) ───────────────────
+        if (e.target.closest('[data-swdd-action="reset"]')) {
+            if (settingsPanelPage === 'mirrors') {
+                // Apaga somente as chaves dos mirrors desta instância do jogo
+                GAME.mirrors.filter(m => m.type === 'per_mod').forEach(m => {
+                    delete mirrorConcurrency[m.id];
+                });
+                GM_setValue('mirrorConcurrency', mirrorConcurrency);
+                settingsPanel.innerHTML = buildMirrorsPageHtml();
+            } else {
+                showCacheInfo  = 0;
+                showMirrorInfo = 1;
+                GM_setValue('showCacheInfo',  showCacheInfo);
+                GM_setValue('showMirrorInfo', showMirrorInfo);
+                settingsPanel.innerHTML = buildMainPageHtml();
+                closeTooltipIfOpen();
+                reRenderAllWidgets();
+            }
+            return;
+        }
+
+        // ── Stepper: ajusta concorrência de um mirror ────────────────────
+        const stepperBtn = e.target.closest('[data-swdd-action="stepper"]');
+        if (stepperBtn && !stepperBtn.disabled) {
+            const mirrorId = stepperBtn.dataset.mirrorId;
+            const step     = parseInt(stepperBtn.dataset.step, 10);
+            const current  = mirrorConcurrency[mirrorId] != null ? mirrorConcurrency[mirrorId] : DEFAULT_PER_MOD_CONCURRENT;
+            const newVal   = Math.max(1, Math.min(20, current + step));
+            mirrorConcurrency[mirrorId] = newVal;
+            GM_setValue('mirrorConcurrency', mirrorConcurrency);
+            settingsPanel.innerHTML = buildMirrorsPageHtml();
+            // Aplica o novo limite imediatamente à fila em andamento deste mirror
+            const limiter = PerModRequestLimiter.forMirror(mirrorId);
+            if (limiter.drain) limiter.drain();
+            return;
+        }
+
+        // ── Toggles de exibição (página principal) ───────────────────────
         const row = e.target.closest('.swdd-settings-row');
         if (!row) return;
-
         const setting = row.dataset.swddSetting;
         if (setting === 'cacheInfo') {
             showCacheInfo = showCacheInfo ? 0 : 1;
@@ -3626,7 +3824,7 @@
         }
 
         // Atualiza o painel visualmente sem fechar
-        settingsPanel.innerHTML = buildSettingsPanelHtml();
+        settingsPanel.innerHTML = buildMainPageHtml();
         // Nota: positionSettingsPanel() é intencionalmente omitido aqui.
         // O painel tem altura fixa (o toggle só troca uma classe CSS, não
         // altera o tamanho do conteúdo). Recalcular a posição causava um
