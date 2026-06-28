@@ -3,11 +3,9 @@
   "version": "1.0.0",
   "description": "Userscripts para ViolentMonkey",
   "scripts": {
-    "test": "vitest run",
-    "test:unit": "vitest run",
+    "test": "playwright test --config=playwright.config.js",
     "test:pw": "playwright test --config=playwright.config.js",
-    "test:all": "vitest run && playwright test --config=playwright.config.js",
-    "lint": "eslint Testes/ playwright.config.js vitest.config.js *.user.js"
+    "lint": "eslint Testes/ playwright.config.js *.user.js"
   },
   "repository": {
     "type": "git",
@@ -26,7 +24,6 @@
     "@playwright/test": "^1.61.1",
     "eslint": "^10.5.0",
     "globals": "^17.7.0",
-    "playwright": "^1.61.1",
-    "vitest": "^4.1.9"
+    "playwright": "^1.61.1"
   }
 }

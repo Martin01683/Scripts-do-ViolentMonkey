@@ -315,6 +315,123 @@ function addOrUpdateMod(resultObj, id, link, parsedDateObj) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// CacheManager (espelha exatamente a implementação do script)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Cria um localStorage em memória, para testes isolados */
+function buildMockStorage() {
+    const store = {};
+    const keys = [];
+    return {
+        setItem(k, v) { if (!(k in store)) keys.push(k); store[k] = v; },
+        getItem(k)    { return k in store ? store[k] : null; },
+        removeItem(k) { const i = keys.indexOf(k); if (i !== -1) keys.splice(i, 1); delete store[k]; },
+        key(i)        { return keys[i] || null; },
+        get length()  { return keys.length; },
+        _store: store,
+    };
+}
+
+function buildCacheManager(storage, tObj) {
+    return {
+        set(key, dataObj) {
+            try {
+                storage.setItem(key, JSON.stringify(dataObj));
+            } catch (e) {
+                if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+                    try {
+                        console.warn('[SWDD]', tObj.consoleStorageQuotaCleanup);
+                        this.clearByPrefix('SWDD_');
+                        storage.setItem(key, JSON.stringify(dataObj));
+                    } catch (err) {
+                        console.error('[SWDD]', tObj.consoleCacheWriteFailed, err);
+                    }
+                }
+            }
+        },
+        get(key) {
+            try {
+                const stored = storage.getItem(key);
+                if (stored) return JSON.parse(stored);
+            } catch (e) { /* JSON inválido */ }
+            return null;
+        },
+        remove(key) { storage.removeItem(key); },
+        clearByPrefix(prefix) {
+            const toRemove = [];
+            for (let i = 0; i < storage.length; i++) {
+                const k = storage.key(i);
+                if (k && k.startsWith(prefix)) toRemove.push(k);
+            }
+            toRemove.forEach(k => storage.removeItem(k));
+        }
+    };
+}
+
+const MOCK_T = {
+    consoleStorageQuotaCleanup: 'Cleanup running',
+    consoleCacheWriteFailed:    'Cache write failed',
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Helpers para testes de getSteamDateAsync
+// ════════════════════════════════════════════════════════════════════════════
+
+const CACHE_TIME_STEAM_MS = 60 * 60 * 1000; // 60 min
+
+/** Cria um mock simples com rastreio de chamadas (substitui vi.fn()) */
+function createMockFn() {
+    let _returnValue;
+    let _callCount = 0;
+    function fn() { _callCount++; return _returnValue; }
+    fn.mockReturnValue  = (v) => { _returnValue = v; };
+    fn.getCallCount     = () => _callCount;
+    fn.resetCalls       = () => { _callCount = 0; };
+    return fn;
+}
+
+/** Reimplementação mínima do caminho cache-hit corrigido de getSteamDateAsync */
+function buildFixedCacheHitPath({ localSteamCache, steamDateCache, utils, saveSteamCacheCalled }) {
+    return function getSteamDateAsync_cacheHitOnly(modId, currentPageId) {
+        const now = Date.now();
+
+        // Evicção de cache expirado
+        if (localSteamCache[modId] && now >= localSteamCache[modId].exp) {
+            delete steamDateCache[modId];
+        }
+
+        const cached = localSteamCache[modId];
+        if (cached && now < cached.exp) {
+            let dateSteam = (cached.date === STEAM_NO_DATE || cached.date === STEAM_FETCH_ERROR)
+                ? cached.date
+                : new Date(cached.date);
+
+            if (dateSteam instanceof Date) {
+                dateSteam.isFallback      = cached.isFallback      || false;
+                dateSteam.hasTimeMismatch = cached.hasTimeMismatch || false;
+
+                // ── BLOCO CORRIGIDO ─────────────────────────────────────────
+                const isCurrentPage = currentPageId === modId;
+                if (isCurrentPage) {
+                    const htmlDate = utils.parseSteamHTMLDate();
+                    const mismatch = !!(htmlDate &&
+                        Math.abs(htmlDate.date.getTime() - dateSteam.getTime()) > 300000);
+                    dateSteam.hasTimeMismatch = mismatch;
+                    if (cached.hasTimeMismatch !== mismatch) {
+                        cached.hasTimeMismatch = mismatch;
+                        saveSteamCacheCalled.push(true);
+                    }
+                }
+                // ── FIM DO BLOCO CORRIGIDO ──────────────────────────────────
+            }
+            steamDateCache[modId] = dateSteam;
+            return dateSteam;
+        }
+        return null; // cache miss
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Expõe tudo via window.__SWDD__ para os testes Playwright
 // ════════════════════════════════════════════════════════════════════════════
 window.__SWDD__ = {
@@ -333,6 +450,14 @@ window.__SWDD__ = {
     formatTimeLeft,
     formatTextWrap,
     addOrUpdateMod,
+    // CacheManager
+    buildMockStorage,
+    buildCacheManager,
+    MOCK_T,
+    // getSteamDateAsync helpers
+    CACHE_TIME_STEAM_MS,
+    createMockFn,
+    buildFixedCacheHitPath,
 };
 
 window.__testReady__ = true;

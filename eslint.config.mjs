@@ -3,29 +3,6 @@ import globals from "globals";
 
 export default [
     js.configs.recommended,
-    // Testes Vitest
-    {
-        files: ["Testes/**/*.test.js"],
-        ignores: ["Testes/**/*.playwright.test.js"],
-        languageOptions: {
-            ecmaVersion: 2020,
-            sourceType: "commonjs",
-            globals: {
-                ...globals.node,
-                // Vitest globals (activos via globals:true no vitest.config.js)
-                describe:   "readonly",
-                test:       "readonly",
-                it:         "readonly",
-                expect:     "readonly",
-                beforeEach: "readonly",
-                afterEach:  "readonly",
-                beforeAll:  "readonly",
-                afterAll:   "readonly",
-                vi:         "readonly",
-            },
-        },
-        rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off" },
-    },
     // Testes Playwright
     {
         files: ["Testes/**/*.playwright.test.js"],
@@ -56,7 +33,7 @@ export default [
         rules: { "no-unused-vars": "warn", "no-undef": "error", "no-console": "off", "no-empty": ["error", { "allowEmptyCatch": true }] },
     },
     {
-        files: ["playwright.config.js", "vitest.config.js"],
+        files: ["playwright.config.js"],
         languageOptions: {
             ecmaVersion: 2020,
             sourceType: "module",
