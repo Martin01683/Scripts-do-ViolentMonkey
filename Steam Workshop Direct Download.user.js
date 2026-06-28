@@ -1954,7 +1954,7 @@
                 .join('');
 
             // Fallbacks de texto caso o usuário não tenha atualizado todas as linguagens no Módulo 2
-            const txtChecked = t.checkedMirrors || 'Mirrors verificados:';
+            const txtChecked = t.checkedMirrors || 'Mirrors checked:';
 
             // "Melhor versão selecionada" só faz sentido quando uma versão FOI de fato
             // encontrada/selecionada entre os mirrors. No cenário de mod não encontrado
@@ -1964,7 +1964,7 @@
             // "seleção" relevante entre opções a se comunicar ao usuário.
             let bestAvailableHtml = '';
             if (showBestAvailable && consultedMirrors.length > 1) {
-                const txtBest = t.bestAvailable || 'Melhor versão disponível selecionada';
+                const txtBest = t.bestAvailable || 'Best available version selected';
                 // Cor verde puxada diretamente do Dicionário Central de Temas, em vez de fixa no CSS
                 const successColor = this.THEMES.success.color;
                 bestAvailableHtml = `
@@ -3582,12 +3582,12 @@
      * navegação para Mirrors + botão de restaurar padrões desta página).
      */
     function buildMainPageHtml() {
-        const settingsTitle  = t.settingsTitle   || 'Configurações';
-        const cacheLabel     = t.toggleCacheInfo  || 'Status do Cache';
-        const mirrorLabel    = t.toggleMirrorInfo || 'Mirrors verificados';
-        const secDisplay     = t.sectionDisplay   || 'Exibição';
-        const secNetwork     = t.sectionNetwork   || 'Rede';
-        const resetText      = t.resetDefaults    || 'Restaurar padrões';
+        const settingsTitle  = t.settingsTitle   || 'Settings';
+        const cacheLabel     = t.toggleCacheInfo  || 'Cache Status';
+        const mirrorLabel    = t.toggleMirrorInfo || 'Verified Mirrors';
+        const secDisplay     = t.sectionDisplay   || 'Display';
+        const secNetwork     = t.sectionNetwork   || 'Network';
+        const resetText      = t.resetDefaults    || 'Restore defaults';
 
         const cacheToggleClass  = showCacheInfo  ? 'swdd-tog-on' : 'swdd-tog-off';
         const mirrorToggleClass = showMirrorInfo ? 'swdd-tog-on' : 'swdd-tog-off';
@@ -3597,7 +3597,7 @@
 
         const total  = GAME.mirrors.length;
         const perMod = GAME.mirrors.filter(m => m.type === 'per_mod').length;
-        const configurableWord = t.configurable || 'configurável';
+        const configurableWord = t.configurable || 'configurable';
         const sub    = `${total} mirror${total !== 1 ? 's' : ''} · ${perMod} ${escapeHTML(configurableWord)}`;
 
         return `
@@ -3633,9 +3633,9 @@
      */
     function buildMirrorsPageHtml() {
         const CHEVRON_LEFT_SVG = SvgIcon.build('chevronLeft', { size: 12, style: 'flex-shrink:0;' });
-        const concLabel  = t.concurrentConns || 'Conexões simultâneas';
-        const fullHint   = t.fullDbHint      || 'Banco completo · 1 requisição';
-        const resetText  = t.resetDefaults   || 'Restaurar padrões';
+        const concLabel  = t.concurrentConns || 'Simultaneous connections';
+        const fullHint   = t.fullDbHint      || 'Full DB · 1 request';
+        const resetText  = t.resetDefaults   || 'Restore defaults';
 
         const mirrorsHtml = GAME.mirrors.map(m => {
             const badgeClass = m.type === 'per_mod' ? 'swdd-badge-per' : 'swdd-badge-full';
@@ -3686,7 +3686,7 @@
 
     settingsFab.id        = 'swdd-settings-fab';
     settingsFab.className = 'swdd-fab-el'; // className começa com "swdd-": o MutationObserver ignora re-inserções
-    settingsFab.setAttribute('aria-label', t.settingsTitle || 'Configurações SWDD');
+    settingsFab.setAttribute('aria-label', t.settingsTitle || 'Settings SWDD');
     settingsFab.innerHTML = SvgIcon.build('settings', { size: 18, style: 'display:block;' });
 
     settingsPanel.id        = 'swdd-settings-panel';
