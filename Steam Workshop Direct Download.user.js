@@ -178,7 +178,71 @@
     };
 
     // ========================================================================
-    // MÓDULO 0.2: MONTH MAP (Tabela Universal de Meses)
+    // MÓDULO 0.2: PER-MOD REQUEST LIMITER (Semáforo de Concorrência por Mirror)
+    //
+    // Problema: mirrors do tipo "per_mod" fazem UMA requisição HTTP por mod.
+    // Com scroll rápido, o IntersectionObserver pode disparar renderWidget()
+    // para muitos itens ao mesmo tempo, gerando um burst de requisições
+    // simultâneas para o mesmo mirror — suficiente para acionar o rate limit
+    // do Cloudflare (tipicamente ~20 req/min por IP para endpoints de API).
+    //
+    // Solução: semáforo FIFO independente por mirror. Cada mirror tem seu
+    // próprio limitador com MAX_CONCURRENT slots. Quando todos os slots estão
+    // ocupados, as requisições extras aguardam na fila e são despachadas assim
+    // que um slot fica livre — sem delay artificial, a latência da rede já
+    // funciona como espaçamento natural entre as requisições.
+    //
+    // Compatível com a deduplicação de pendingMirrorRequests em fetchMirrorAsync:
+    // a Promise externa é criada imediatamente (deduplicação funciona),
+    // mas o ApiClient.fetch() interno só é executado quando há slot disponível.
+    //
+    // Por que por mirror, e não global?
+    // Um semáforo global bloquearia todos os mirrors enquanto um mirror lento
+    // estivesse ocupando seus slots. Com semáforos independentes, o Mirror A
+    // e o Mirror B preenchem seus slots em paralelo sem interferência mútua.
+    // ========================================================================
+    const PerModRequestLimiter = (() => {
+        const MAX_CONCURRENT = 2; // slots simultâneos por mirror
+        const limiters = {};      // { [mirrorId]: limiter }
+
+        function createLimiter() {
+            let running = 0;
+            const queue = [];
+
+            function drain() {
+                while (running < MAX_CONCURRENT && queue.length > 0) {
+                    const { task, resolve, reject } = queue.shift();
+                    running++;
+                    task()
+                        .then(resolve, reject)
+                        .finally(() => { running--; drain(); });
+                }
+            }
+
+            return {
+                run(task) {
+                    return new Promise((resolve, reject) => {
+                        queue.push({ task, resolve, reject });
+                        drain();
+                    });
+                },
+                /** Exposto apenas para testes — não usar em produção. */
+                _getRunning() { return running; },
+                _getQueueLength() { return queue.length; }
+            };
+        }
+
+        return {
+            /** Retorna (criando se necessário) o limiter do mirror especificado. */
+            forMirror(mirrorId) {
+                if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter();
+                return limiters[mirrorId];
+            }
+        };
+    })();
+
+    // ========================================================================
+    // MÓDULO 0.3: MONTH MAP (Tabela Universal de Meses)
     // Constrói e armazena em cache um mapa de nome de mês → índice (0-11)
     // cobrindo todos os 30 idiomas oficiais da Steam.
     // As duas fontes (tabela manual + Intl.DateTimeFormat) rodam em paralelo
@@ -2842,7 +2906,14 @@
                 const targetUrl = mirrorConfig.type === 'per_mod' ? mirrorConfig.url(modId) : mirrorConfig.url;
                 // Anexa parâmetro '_t' com Date.now() para burlar caching restritivo do servidor
                 const finalUrl = targetUrl + (targetUrl.includes('?') ? '&' : '?') + '_t=' + now;
-                const res = await ApiClient.fetch(finalUrl);
+
+                // Mirrors per_mod passam pelo semáforo (PerModRequestLimiter) para evitar
+                // burst de requisições simultâneas ao mesmo servidor durante scroll rápido.
+                // Mirrors full_db fazem apenas 1 requisição compartilhada (deduplicada pelo
+                // pendingMirrorRequests acima), então não precisam do semáforo.
+                const res = mirrorConfig.type === 'per_mod'
+                    ? await PerModRequestLimiter.forMirror(mirrorConfig.id).run(() => ApiClient.fetch(finalUrl))
+                    : await ApiClient.fetch(finalUrl);
 
                 const parsedData = mirrorConfig.type === 'per_mod' ? mirrorConfig.parser(res.responseText, modId) : mirrorConfig.parser(res.responseText);
                 const cacheObj = { data: parsedData, exp: now + mirrorConfig.cacheTime, creation: now };
