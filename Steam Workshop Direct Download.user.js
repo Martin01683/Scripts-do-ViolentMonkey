@@ -202,7 +202,7 @@
     // e o Mirror B preenchem seus slots em paralelo sem interferência mútua.
     // ========================================================================
     const PerModRequestLimiter = (() => {
-        const MAX_CONCURRENT = 2; // slots simultâneos por mirror
+        const MAX_CONCURRENT = 10; // slots simultâneos por mirror
         const limiters = {};      // { [mirrorId]: limiter }
 
         function createLimiter() {

@@ -20,7 +20,7 @@ const { test, expect } = require('@playwright/test');
 const path = require('path');
 
 const HTML_FILE = `file://${path.resolve(__dirname, 'perModLimiter.browser.html')}`;
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 10;
 
 test.beforeEach(async ({ page }) => {
     await page.goto(HTML_FILE);

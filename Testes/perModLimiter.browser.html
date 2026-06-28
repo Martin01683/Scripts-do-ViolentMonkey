@@ -13,7 +13,7 @@
 // Qualquer mudança no módulo 0.2 do script principal deve ser replicada aqui.
 // =========================================================================
 const PerModRequestLimiter = (() => {
-    const MAX_CONCURRENT = 2;
+    const MAX_CONCURRENT = 10;
     const limiters = {};
 
     function createLimiter() {
