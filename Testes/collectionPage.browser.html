@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>SWDD Collection Page Injector Test</title>
+</head>
+<body>
+
+<!--
+    Mock de uma página de coleção do Steam Workshop.
+    Contém os casos de uso que o injetor CollectionItems deve tratar:
+      - 3 itens válidos (IDs numéricos, botão presente)
+      - 1 item sem botão de inscrição (deve ser ignorado)
+      - 1 item com ID não-numérico no botão (deve ser ignorado)
+-->
+<div id="mainContentsCollection">
+
+    <!-- Itens válidos -->
+    <div id="sharedfile_1111111111" class="collectionItem">
+        <div class="workshopItem">
+            <a href="/sharedfiles/filedetails/?id=1111111111">
+                <div class="workshopItemPreviewHolder"></div>
+            </a>
+        </div>
+        <div class="collectionItemDetails">
+            <a href="/sharedfiles/filedetails/?id=1111111111">
+                <div class="workshopItemTitle">Mod One</div>
+            </a>
+        </div>
+        <div class="subscriptionControls">
+            <span class="action_wait" id="action_wait_1111111111" style="display:none"></span>
+            <a id="SubscribeItemBtn1111111111" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
+    <div id="sharedfile_2222222222" class="collectionItem">
+        <div class="workshopItem">
+            <a href="/sharedfiles/filedetails/?id=2222222222">
+                <div class="workshopItemPreviewHolder"></div>
+            </a>
+        </div>
+        <div class="collectionItemDetails">
+            <a href="/sharedfiles/filedetails/?id=2222222222">
+                <div class="workshopItemTitle">Mod Two</div>
+            </a>
+        </div>
+        <div class="subscriptionControls">
+            <span class="action_wait" id="action_wait_2222222222" style="display:none"></span>
+            <a id="SubscribeItemBtn2222222222" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
+    <div id="sharedfile_3333333333" class="collectionItem">
+        <div class="workshopItem">
+            <a href="/sharedfiles/filedetails/?id=3333333333">
+                <div class="workshopItemPreviewHolder"></div>
+            </a>
+        </div>
+        <div class="collectionItemDetails">
+            <a href="/sharedfiles/filedetails/?id=3333333333">
+                <div class="workshopItemTitle">Mod Three</div>
+            </a>
+        </div>
+        <div class="subscriptionControls">
+            <span class="action_wait" id="action_wait_3333333333" style="display:none"></span>
+            <a id="SubscribeItemBtn3333333333" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
+    <!-- Item sem botão de inscrição (caso de borda) -->
+    <div id="sharedfile_nobutton" class="collectionItem">
+        <div class="collectionItemDetails">
+            <a href="/sharedfiles/filedetails/?id=4444444444">
+                <div class="workshopItemTitle">No Button Mod</div>
+            </a>
+        </div>
+        <div class="subscriptionControls">
+            <!-- Intencionalmente sem #SubscribeItemBtn* -->
+        </div>
+    </div>
+
+    <!-- Item com ID não-numérico no botão (caso de borda) -->
+    <div id="sharedfile_badid" class="collectionItem">
+        <div class="subscriptionControls">
+            <a id="SubscribeItemBtnABCDEFGHIJ" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
+</div>
+
+<script>
+'use strict';
+
+/**
+ * Stubs mínimos das APIs Tampermonkey/ViolentMonkey.
+ */
+window.GM_getValue          = (k, def) => def;
+window.GM_setValue          = () => {};
+window.GM_addStyle          = () => {};
+window.GM_xmlhttpRequest    = () => {};
+window.GM_openInTab         = () => {};
+window.GM_registerMenuCommand = () => {};
+
+/**
+ * activeWidgets — rastreia todos os containers criados pelo injetor,
+ * espelhando o comportamento do script real.
+ */
+const activeWidgets = new Set();
+
+/**
+ * renderWidget — stub que marca o container para verificação nos testes,
+ * sem fazer requisições de rede.
+ *
+ * No script real, renderWidget() dispara fetch para mirrors e preenche o
+ * botão de download. Aqui apenas registramos que foi chamado e com qual ID.
+ */
+function renderWidget(container, modId) {
+    container.dataset.renderCalled = 'true';
+    container.dataset.renderModId  = modId;
+}
+
+/**
+ * stopCardNav — stub sem operação (no script real previne propagação de
+ * cliques no widget para o link do card).
+ */
+function stopCardNav() {}
+
+/**
+ * runCollectionItemsInjector — cópia exata da lógica do injetor
+ * "CollectionItems" do script principal.
+ *
+ * Qualquer mudança no injetor do script principal deve ser replicada aqui.
+ */
+function runCollectionItemsInjector() {
+    document.querySelectorAll('.collectionItem').forEach(item => {
+        if (item.dataset.swddInjected) return;
+
+        const subscribeBtn = item.querySelector('[id^="SubscribeItemBtn"]');
+        if (!subscribeBtn) return;
+
+        const modId = subscribeBtn.id.replace('SubscribeItemBtn', '');
+        if (!modId || !/^\d+$/.test(modId)) return;
+
+        item.dataset.swddInjected = 'true';
+
+        const controls = subscribeBtn.parentElement;
+        if (!controls) return;
+
+        controls.style.display    = 'flex';
+        controls.style.alignItems = 'center';
+        controls.style.gap        = '6px';
+        controls.style.flexWrap   = 'wrap';
+
+        const container = document.createElement('div');
+        container.className      = 'swdd-widget-container';
+        container.dataset.modid  = modId;
+        container.dataset.iscard = 'false';
+
+        stopCardNav(container);
+        subscribeBtn.insertAdjacentElement('beforebegin', container);
+        activeWidgets.add(container);
+        renderWidget(container, modId, false);
+    });
+}
+
+/**
+ * API pública para os testes Playwright.
+ */
+window.__swddTest__ = {
+    /** Executa o injetor de itens de coleção. */
+    runInjector: runCollectionItemsInjector,
+
+    /** Retorna quantos containers estão em activeWidgets. */
+    getActiveWidgetCount: () => activeWidgets.size,
+
+    /**
+     * Limpa o estado entre testes: remove data-swdd-injected de todos os
+     * .collectionItem, remove todos os containers injetados e limpa o Set.
+     */
+    resetInjected: () => {
+        document.querySelectorAll('.collectionItem[data-swdd-injected]').forEach(el => {
+            delete el.dataset.swddInjected;
+        });
+        document.querySelectorAll('.swdd-widget-container').forEach(el => el.remove());
+        // Restaura o estilo original dos .subscriptionControls
+        document.querySelectorAll('.subscriptionControls').forEach(el => {
+            el.style.display    = '';
+            el.style.alignItems = '';
+            el.style.gap        = '';
+            el.style.flexWrap   = '';
+        });
+        activeWidgets.clear();
+    }
+};
+
+window.__testReady__ = true;
+</script>
+
+</body>
+</html>

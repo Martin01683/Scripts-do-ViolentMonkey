@@ -3266,6 +3266,54 @@
                     }
                 });
             }
+        },
+        {
+            // Página de coleção do Workshop (sharedfiles/filedetails?id=... com vários mods listados).
+            // Estrutura de cada item:
+            //   <div class="collectionItem">
+            //     <div class="subscriptionControls">
+            //       <a id="SubscribeItemBtn{modId}" class="general_btn subscribe">...</a>
+            //     </div>
+            //   </div>
+            // Os injetores ModDetailPage, TitleLinks e CardZoomIcons não cobrem esta página porque:
+            //   – ModDetailPage busca #SubscribeItemBtn (sem sufixo) → não existe em coleções
+            //   – TitleLinks busca h2 a[href*="?id="] → títulos de coleção usam div, não h2
+            //   – CardZoomIcons busca .SVGIcon_MagnifyingGlass → ausente na UI legada de coleções
+            name: "CollectionItems",
+            match: () => document.querySelector('.collectionItem') !== null,
+            inject: () => {
+                document.querySelectorAll('.collectionItem').forEach(item => {
+                    if (item.dataset.swddInjected) return;
+
+                    // O botão de inscrição tem id="SubscribeItemBtn{modId}"
+                    const subscribeBtn = item.querySelector('[id^="SubscribeItemBtn"]');
+                    if (!subscribeBtn) return;
+
+                    const modId = subscribeBtn.id.replace('SubscribeItemBtn', '');
+                    if (!modId || !/^\d+$/.test(modId)) return;
+
+                    item.dataset.swddInjected = 'true';
+
+                    const controls = subscribeBtn.parentElement;
+                    if (!controls) return;
+
+                    // Transforma o contêiner de controles em flex row para acomodar o widget
+                    controls.style.display    = 'flex';
+                    controls.style.alignItems = 'center';
+                    controls.style.gap        = '6px';
+                    controls.style.flexWrap   = 'wrap';
+
+                    const container = document.createElement('div');
+                    container.className      = 'swdd-widget-container';
+                    container.dataset.modid  = modId;
+                    container.dataset.iscard = 'false';
+
+                    stopCardNav(container);
+                    subscribeBtn.insertAdjacentElement('beforebegin', container);
+                    activeWidgets.add(container);
+                    renderWidget(container, modId, false);
+                });
+            }
         }
     ];
 
