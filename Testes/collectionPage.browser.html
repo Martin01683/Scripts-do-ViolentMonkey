@@ -9,13 +9,14 @@
 <!--
     Mock de uma página de coleção do Steam Workshop.
     Contém os casos de uso que o injetor CollectionItems deve tratar:
-      - 3 itens válidos (IDs numéricos, botão presente)
+      - 3 itens válidos na tela (IDs numéricos, botão presente)
       - 1 item sem botão de inscrição (deve ser ignorado)
       - 1 item com ID não-numérico no botão (deve ser ignorado)
+      - 2 itens fora da tela (para testar lazy loading)
 -->
 <div id="mainContentsCollection">
 
-    <!-- Itens válidos -->
+    <!-- Itens válidos (visíveis no viewport) -->
     <div id="sharedfile_1111111111" class="collectionItem">
         <div class="workshopItem">
             <a href="/sharedfiles/filedetails/?id=1111111111">
@@ -94,6 +95,30 @@
         </div>
     </div>
 
+    <!--
+        Espaçador para empurrar os próximos itens além do viewport (1280x720).
+        Os itens abaixo testam o comportamento lazy: não devem ser renderizados
+        até que o usuário role a página até eles.
+    -->
+    <div id="offscreen-spacer" style="height: 2000px;"></div>
+
+    <!-- Itens fora da tela (lazy loading) -->
+    <div id="sharedfile_7777777777" class="collectionItem">
+        <div class="subscriptionControls">
+            <a id="SubscribeItemBtn7777777777" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
+    <div id="sharedfile_8888888888" class="collectionItem">
+        <div class="subscriptionControls">
+            <a id="SubscribeItemBtn8888888888" class="general_btn subscribe">
+                <div class="subscribeIcon"></div>
+            </a>
+        </div>
+    </div>
+
 </div>
 
 <script>
@@ -116,6 +141,13 @@ window.GM_registerMenuCommand = () => {};
 const activeWidgets = new Set();
 
 /**
+ * pendingObservation — containers aguardando entrar no viewport.
+ * Espelha o comportamento do script real: scheduleWidgetRender() adiciona
+ * aqui e widgetVisibilityObserver remove ao disparar renderWidget().
+ */
+const pendingObservation = new Set();
+
+/**
  * renderWidget — stub que marca o container para verificação nos testes,
  * sem fazer requisições de rede.
  *
@@ -125,6 +157,7 @@ const activeWidgets = new Set();
 function renderWidget(container, modId) {
     container.dataset.renderCalled = 'true';
     container.dataset.renderModId  = modId;
+    return Promise.resolve();
 }
 
 /**
@@ -132,6 +165,41 @@ function renderWidget(container, modId) {
  * cliques no widget para o link do card).
  */
 function stopCardNav() {}
+
+/**
+ * widgetVisibilityObserver — cópia exata do observer do script principal.
+ * Só chama renderWidget() quando o container entra no viewport (+ 200px).
+ *
+ * Qualquer mudança no observer do script principal deve ser replicada aqui.
+ */
+const widgetVisibilityObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const container = entry.target;
+        widgetVisibilityObserver.unobserve(container);
+        pendingObservation.delete(container);
+        delete container.dataset.swddPending;
+        const modId  = container.dataset.modid;
+        const isCard = container.dataset.iscard === 'true';
+        if (modId) renderWidget(container, modId, isCard);
+    });
+}, {
+    rootMargin: '200px 0px',
+    threshold: 0
+});
+
+/**
+ * scheduleWidgetRender — cópia exata da função do script principal.
+ * Registra o container no observer; renderWidget() só é chamado quando visível.
+ *
+ * Qualquer mudança no scheduleWidgetRender do script principal deve ser replicada aqui.
+ */
+function scheduleWidgetRender(container, modId, isCard) {
+    void modId; void isCard;
+    pendingObservation.add(container);
+    container.dataset.swddPending = 'true';
+    widgetVisibilityObserver.observe(container);
+}
 
 /**
  * runCollectionItemsInjector — cópia exata da lógica do injetor
@@ -167,7 +235,7 @@ function runCollectionItemsInjector() {
         stopCardNav(container);
         subscribeBtn.insertAdjacentElement('beforebegin', container);
         activeWidgets.add(container);
-        renderWidget(container, modId, false);
+        scheduleWidgetRender(container, modId, false);
     });
 }
 
@@ -181,11 +249,43 @@ window.__swddTest__ = {
     /** Retorna quantos containers estão em activeWidgets. */
     getActiveWidgetCount: () => activeWidgets.size,
 
+    /** Retorna quantos containers ainda aguardam visibilidade (não renderizados). */
+    getPendingCount: () => pendingObservation.size,
+
+    /**
+     * Aguarda até que todos os containers visíveis tenham sido renderizados
+     * (data-swdd-pending removido). Containers fora da tela permanecem pendentes
+     * e não bloqueiam esta Promise.
+     *
+     * Uso nos testes: await page.evaluate(() => window.__swddTest__.waitForVisible())
+     */
+    waitForVisible: () => new Promise(resolve => {
+        const check = () => {
+            // Considera "completo" quando nenhum container IN-VIEWPORT ainda está pendente.
+            // Containers fora da tela continuarão com data-swdd-pending e isso é correto.
+            const visiblePending = Array.from(
+                document.querySelectorAll('.swdd-widget-container[data-swdd-pending]')
+            ).filter(el => {
+                const rect = el.getBoundingClientRect();
+                return rect.bottom >= -200 && rect.top <= window.innerHeight + 200;
+            });
+            if (visiblePending.length === 0) { resolve(); return; }
+            setTimeout(check, 20);
+        };
+        check();
+    }),
+
     /**
      * Limpa o estado entre testes: remove data-swdd-injected de todos os
-     * .collectionItem, remove todos os containers injetados e limpa o Set.
+     * .collectionItem, remove todos os containers injetados e limpa os Sets.
      */
     resetInjected: () => {
+        // Cancela observação de todos os containers pendentes antes de remover
+        for (const container of pendingObservation) {
+            widgetVisibilityObserver.unobserve(container);
+        }
+        pendingObservation.clear();
+
         document.querySelectorAll('.collectionItem[data-swdd-injected]').forEach(el => {
             delete el.dataset.swddInjected;
         });

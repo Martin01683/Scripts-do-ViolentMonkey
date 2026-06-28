@@ -21,7 +21,8 @@
  *   - Itens com ID não-numérico são ignorados
  *   - Idempotência: segunda execução não cria duplicatas
  *   - activeWidgets tem o número correto de entradas
- *   - renderWidget é chamado com o modId correto
+ *   - renderWidget é chamado apenas quando o item está visível no viewport
+ *   - Itens fora da tela NÃO disparam renderWidget até serem rolados até eles
  *   - Itens adicionados dinamicamente são processados na re-execução
  *
  * Executar: npx playwright test Testes/collectionPage.playwright.test.js
@@ -42,13 +43,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// BLOCO 1: Injeção básica
+// BLOCO 1: Injeção básica (containers criados)
 // ════════════════════════════════════════════════════════════════════════════
 
-test('CollectionItems: injeta widget em todos os 3 itens válidos', async ({ page }) => {
+test('CollectionItems: injeta container em todos os 5 itens válidos (3 na tela + 2 fora)', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
     const count = await page.locator('.swdd-widget-container').count();
-    expect(count).toBe(3);
+    expect(count).toBe(5);
 });
 
 test('CollectionItems: widget do item 1 tem data-modid correto', async ({ page }) => {
@@ -177,46 +178,135 @@ test('CollectionItems: segunda execução não cria widgets duplicados', async (
     await page.evaluate(() => window.__swddTest__.runInjector());
     await page.evaluate(() => window.__swddTest__.runInjector()); // segunda vez
     const count = await page.locator('.swdd-widget-container').count();
-    expect(count).toBe(3); // ainda exatamente 3, não 6
+    expect(count).toBe(5); // ainda exatamente 5, não 10
 });
 
-test('CollectionItems: activeWidgets tem exatamente 3 entradas após injeção', async ({ page }) => {
+test('CollectionItems: activeWidgets tem exatamente 5 entradas após injeção', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
     const count = await page.evaluate(() => window.__swddTest__.getActiveWidgetCount());
-    expect(count).toBe(3);
+    expect(count).toBe(5);
 });
 
 test('CollectionItems: activeWidgets não cresce em segunda execução', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
     await page.evaluate(() => window.__swddTest__.runInjector());
     const count = await page.evaluate(() => window.__swddTest__.getActiveWidgetCount());
-    expect(count).toBe(3);
+    expect(count).toBe(5);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// BLOCO 8: renderWidget chamado corretamente
+// BLOCO 8: Lazy render — renderWidget só é chamado quando visível
 // ════════════════════════════════════════════════════════════════════════════
 
-test('CollectionItems: renderWidget é chamado para todos os itens válidos', async ({ page }) => {
+test('CollectionItems: renderWidget é chamado apenas para itens visíveis (3 de 5)', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
+    // Aguarda o IntersectionObserver disparar para todos os itens visíveis
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
     const renderCount = await page.locator('.swdd-widget-container[data-render-called="true"]').count();
+    // Apenas os 3 itens na tela devem ter sido renderizados; os 2 off-screen ficam pendentes
     expect(renderCount).toBe(3);
+});
+
+test('CollectionItems: itens fora da tela NÃO disparam renderWidget imediatamente', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    const offscreen7 = await page.locator('#sharedfile_7777777777 .swdd-widget-container').getAttribute('data-render-called');
+    const offscreen8 = await page.locator('#sharedfile_8888888888 .swdd-widget-container').getAttribute('data-render-called');
+    expect(offscreen7).toBeNull();
+    expect(offscreen8).toBeNull();
+});
+
+test('CollectionItems: itens fora da tela têm data-swdd-pending="true"', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    const pending7 = await page.locator('#sharedfile_7777777777 .swdd-widget-container').getAttribute('data-swdd-pending');
+    const pending8 = await page.locator('#sharedfile_8888888888 .swdd-widget-container').getAttribute('data-swdd-pending');
+    expect(pending7).toBe('true');
+    expect(pending8).toBe('true');
+});
+
+test('CollectionItems: itens visíveis NÃO têm data-swdd-pending após renderização', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    const pending1 = await page.locator('#sharedfile_1111111111 .swdd-widget-container').getAttribute('data-swdd-pending');
+    const pending2 = await page.locator('#sharedfile_2222222222 .swdd-widget-container').getAttribute('data-swdd-pending');
+    const pending3 = await page.locator('#sharedfile_3333333333 .swdd-widget-container').getAttribute('data-swdd-pending');
+    expect(pending1).toBeNull();
+    expect(pending2).toBeNull();
+    expect(pending3).toBeNull();
+});
+
+test('CollectionItems: renderWidget é chamado para item off-screen ao rolar até ele', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    // Confirma que o item ainda não foi renderizado
+    const beforeScroll = await page.locator('#sharedfile_7777777777 .swdd-widget-container').getAttribute('data-render-called');
+    expect(beforeScroll).toBeNull();
+
+    // Rola até o item off-screen
+    await page.locator('#sharedfile_7777777777').scrollIntoViewIfNeeded();
+
+    // Aguarda o observer disparar
+    await page.waitForFunction(() => {
+        const c = document.querySelector('#sharedfile_7777777777 .swdd-widget-container');
+        return c && c.dataset.renderCalled === 'true';
+    });
+
+    const afterScroll = await page.locator('#sharedfile_7777777777 .swdd-widget-container').getAttribute('data-render-called');
+    expect(afterScroll).toBe('true');
+});
+
+test('CollectionItems: data-swdd-pending removido após rolar até o item', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    await page.locator('#sharedfile_7777777777').scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => {
+        const c = document.querySelector('#sharedfile_7777777777 .swdd-widget-container');
+        return c && !c.dataset.swddPending;
+    });
+
+    const pending = await page.locator('#sharedfile_7777777777 .swdd-widget-container').getAttribute('data-swdd-pending');
+    expect(pending).toBeNull();
+});
+
+test('CollectionItems: pendingCount reduz ao rolar até itens off-screen', async ({ page }) => {
+    await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
+
+    const pendingBefore = await page.evaluate(() => window.__swddTest__.getPendingCount());
+    expect(pendingBefore).toBe(2); // os 2 itens off-screen
+
+    await page.locator('#sharedfile_7777777777').scrollIntoViewIfNeeded();
+    await page.locator('#sharedfile_8888888888').scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => window.__swddTest__.getPendingCount() === 0);
+
+    const pendingAfter = await page.evaluate(() => window.__swddTest__.getPendingCount());
+    expect(pendingAfter).toBe(0);
 });
 
 test('CollectionItems: renderWidget recebe o modId correto para item 1', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
     const renderModId = await page.locator('#sharedfile_1111111111 .swdd-widget-container').getAttribute('data-render-mod-id');
     expect(renderModId).toBe('1111111111');
 });
 
 test('CollectionItems: renderWidget recebe o modId correto para item 2', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
     const renderModId = await page.locator('#sharedfile_2222222222 .swdd-widget-container').getAttribute('data-render-mod-id');
     expect(renderModId).toBe('2222222222');
 });
 
 test('CollectionItems: renderWidget recebe o modId correto para item 3', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
     const renderModId = await page.locator('#sharedfile_3333333333 .swdd-widget-container').getAttribute('data-render-mod-id');
     expect(renderModId).toBe('3333333333');
 });
@@ -225,10 +315,11 @@ test('CollectionItems: renderWidget recebe o modId correto para item 3', async (
 // BLOCO 9: Itens adicionados dinamicamente
 // ════════════════════════════════════════════════════════════════════════════
 
-test('CollectionItems: novo item adicionado ao DOM é processado na re-execução', async ({ page }) => {
+test('CollectionItems: novo item visível adicionado ao DOM é processado na re-execução', async ({ page }) => {
     await page.evaluate(() => window.__swddTest__.runInjector());
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
 
-    // Adiciona um quarto item dinamicamente após a primeira injeção
+    // Adiciona um quarto item visível dinamicamente (antes do espaçador off-screen)
     await page.evaluate(() => {
         const newItem = document.createElement('div');
         newItem.id        = 'sharedfile_9999999999';
@@ -239,13 +330,15 @@ test('CollectionItems: novo item adicionado ao DOM é processado na re-execuçã
                     <div class="subscribeIcon"></div>
                 </a>
             </div>`;
-        document.getElementById('mainContentsCollection').appendChild(newItem);
+        // Insere antes do espaçador para que fique visível
+        document.getElementById('offscreen-spacer').insertAdjacentElement('beforebegin', newItem);
     });
 
     await page.evaluate(() => window.__swddTest__.runInjector()); // re-executa
+    await page.evaluate(() => window.__swddTest__.waitForVisible());
 
     const totalWidgets = await page.locator('.swdd-widget-container').count();
-    expect(totalWidgets).toBe(4); // 3 originais + 1 novo
+    expect(totalWidgets).toBe(6); // 3 originais visíveis + 2 off-screen + 1 novo
 });
 
 test('CollectionItems: widget do item dinâmico tem data-modid correto', async ({ page }) => {
@@ -261,7 +354,7 @@ test('CollectionItems: widget do item dinâmico tem data-modid correto', async (
                     <div class="subscribeIcon"></div>
                 </a>
             </div>`;
-        document.getElementById('mainContentsCollection').appendChild(newItem);
+        document.getElementById('offscreen-spacer').insertAdjacentElement('beforebegin', newItem);
     });
 
     await page.evaluate(() => window.__swddTest__.runInjector());

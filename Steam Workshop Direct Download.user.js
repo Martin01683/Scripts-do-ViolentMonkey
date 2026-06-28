@@ -2452,6 +2452,12 @@
 
     const activeWidgets = new Set();
 
+    // Containers aguardando visibilidade: scheduleWidgetRender() os adiciona aqui e
+    // widgetVisibilityObserver os remove quando entram no viewport.
+    // Usado pelo heartbeat e por reRenderAllWidgets() para pular widgets que ainda
+    // não foram renderizados pela primeira vez (evita requisições desnecessárias).
+    const pendingObservation = new Set();
+
     // Heartbeat central do script (Loop que roda 1x por segundo)
     setInterval(() => {
         if (dropdownGlobal.classList.contains('show')) updateDropdownCacheText();
@@ -2490,7 +2496,21 @@
 
             for (const container of activeWidgets) {
                 // Checagem rigorosa para evitar leak de memória (limpa widgets que já foram removidos da tela)
-                if (!document.documentElement.contains(container)) { activeWidgets.delete(container); continue; }
+                if (!document.documentElement.contains(container)) {
+                    activeWidgets.delete(container);
+                    // Se o container ainda aguardava visibilidade, cancela a observação para liberar recursos
+                    if (pendingObservation.has(container)) {
+                        widgetVisibilityObserver.unobserve(container);
+                        pendingObservation.delete(container);
+                    }
+                    continue;
+                }
+
+                // Containers ainda não visíveis (pendentes de observação) não possuem cache ativo
+                // — pular verificação de expiração evita alocação de recursos desnecessária.
+                // Quando entrarem no viewport, o widgetVisibilityObserver chamará renderWidget()
+                // com os dados mais recentes disponíveis naquele momento.
+                if (pendingObservation.has(container)) continue;
 
                 const modId = container.dataset.modid;
                 if (modId) {
@@ -2923,10 +2943,15 @@
      * foram desconectados da DOM (evita leak de memória no Set activeWidgets).
      * Padrão que aparecia duplicado em applyLanguageChange e no handler de
      * "Limpar Cache" — extraído aqui para manutenção em ponto único.
+     *
+     * Containers em pendingObservation (ainda não visíveis) são ignorados:
+     * quando o IntersectionObserver os detectar, renderWidget() é chamado
+     * com os dados mais recentes, então não há nada a re-renderizar agora.
      */
     function reRenderAllWidgets() {
         for (const container of activeWidgets) {
             if (!document.documentElement.contains(container)) { activeWidgets.delete(container); continue; }
+            if (pendingObservation.has(container)) continue;
             if (container.dataset.modid) renderWidget(container, container.dataset.modid, container.dataset.iscard === 'true');
         }
     }
@@ -3161,6 +3186,54 @@
     }
 
     // ========================================================================
+    // MÓDULO 7.1: LAZY RENDER — IntersectionObserver por Visibilidade
+    // Só dispara renderWidget() quando o container entra no viewport (+ 200px
+    // de margem de pré-carga). Isso evita que páginas com muitos mods visíveis
+    // de uma vez (coleções grandes, listagens extensas) disparem dezenas ou
+    // centenas de requisições simultâneas para os mirrors — causa direta dos
+    // banimentos por excesso de tráfego.
+    //
+    // Aplica-se a todos os injetores: ModDetailPage, TitleLinks,
+    // CardZoomIcons e CollectionItems. O container é inserido no DOM com
+    // atributo data-swdd-pending="true" e permanece vazio até que a câmera
+    // do viewport o alcance; só então o script faz as requisições de rede.
+    // ========================================================================
+    const widgetVisibilityObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            const container = entry.target;
+            widgetVisibilityObserver.unobserve(container);
+            pendingObservation.delete(container);
+            delete container.dataset.swddPending;
+            const modId  = container.dataset.modid;
+            const isCard = container.dataset.iscard === 'true';
+            if (modId) renderWidget(container, modId, isCard).catch(err => {
+                console.error('[SWDD]', t.consoleWidgetUpdateFailed, err);
+            });
+        });
+    }, {
+        rootMargin: '200px 0px', // pré-carrega 200px antes do elemento entrar na tela
+        threshold: 0
+    });
+
+    /**
+     * Agenda a renderização do widget para quando o container entrar no viewport.
+     * Substitui a chamada direta a renderWidget() nos injetores: em vez de
+     * disparar requisições imediatamente, o container é registrado no observer
+     * e fica marcado com data-swdd-pending="true" até ficar visível.
+     *
+     * @param {HTMLElement} container - O div do widget já inserido no DOM.
+     * @param {string}      modId     - ID do mod Steam (apenas para consistência com renderWidget).
+     * @param {boolean}     isCard    - Modo compacto (card) ou normal (detalhe).
+     */
+    function scheduleWidgetRender(container, modId, isCard) {
+        void modId; void isCard; // lidos do dataset pelo observer; params mantidos por simetria com renderWidget
+        pendingObservation.add(container);
+        container.dataset.swddPending = 'true';
+        widgetVisibilityObserver.observe(container);
+    }
+
+    // ========================================================================
     // MÓDULO 8: UI INJECTORS (Estratégias de Injeção na DOM do Steam)
     // Desacopla as diferentes partes do HTML que o script deve vigiar (Botões, Listas, etc)
     // facilitando reparações caso a Valve mude a estrutura do site.
@@ -3197,7 +3270,7 @@
                     container.id = 'swdd-widget-main'; container.dataset.modid = modId; container.dataset.iscard = 'false';
                     steamBtn.insertAdjacentElement('beforebegin', container);
                     stopCardNav(container); activeWidgets.add(container);
-                    renderWidget(container, modId, false);
+                    scheduleWidgetRender(container, modId, false);
                 }
             }
         },
@@ -3226,7 +3299,7 @@
                             container.className = 'swdd-widget-container'; container.style.marginRight = '8px';
                             container.dataset.modid = modId; container.dataset.iscard = 'false';
                             stopCardNav(container); anchor.insertAdjacentElement('beforebegin', container);
-                            activeWidgets.add(container); renderWidget(container, modId, false);
+                            activeWidgets.add(container); scheduleWidgetRender(container, modId, false);
                         }
                     }
                 });
@@ -3262,7 +3335,7 @@
                         const container = document.createElement('div');
                         container.className = 'swdd-widget-container'; container.dataset.modid = modId; container.dataset.iscard = 'true';
                         stopCardNav(container); actionRow.prepend(container); activeWidgets.add(container);
-                        renderWidget(container, modId, true);
+                        scheduleWidgetRender(container, modId, true);
                     }
                 });
             }
@@ -3311,7 +3384,7 @@
                     stopCardNav(container);
                     subscribeBtn.insertAdjacentElement('beforebegin', container);
                     activeWidgets.add(container);
-                    renderWidget(container, modId, false);
+                    scheduleWidgetRender(container, modId, false);
                 });
             }
         }
