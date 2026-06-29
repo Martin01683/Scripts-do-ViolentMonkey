@@ -209,8 +209,8 @@
 
         function createLimiter(mirrorId) {
             let running = 0;
-            // Array mantido em ordem DECRESCENTE de prioridade.
-            // Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
+            // Fila FIFO: itens são inseridos no final e removidos dinamicamente.
+            // A prioridade NÃO é calculada na inserção; ela é avaliada a cada dispatch.
             const queue = [];
 
             function drain() {
@@ -218,7 +218,20 @@
                 // imediatamente sem precisar recriar o limiter ou reiniciar a fila.
                 const max = (mirrorConcurrency[mirrorId] != null ? mirrorConcurrency[mirrorId] : DEFAULT_CONCURRENT);
                 while (running < max && queue.length > 0) {
-                    const { task, resolve, reject } = queue.shift();
+                    // Prioridade Dinâmica (O(n)): ao liberar um slot, varre a fila em
+                    // busca do primeiro mod ATUALMENTE visível no viewport. Se nenhum
+                    // estiver visível no instante do dispatch, usa FIFO (índice 0).
+                    // Isso corrige o bug de prioridade estática: um mod que era visível
+                    // ao entrar na fila mas não é mais não ocupa um slot à frente de
+                    // mods que o usuário está olhando agora.
+                    let bestIdx = 0;
+                    for (let i = 0; i < queue.length; i++) {
+                        if (visibleInViewport.has(queue[i].modId)) {
+                            bestIdx = i;
+                            break;
+                        }
+                    }
+                    const { task, resolve, reject } = queue.splice(bestIdx, 1)[0];
                     running++;
                     task()
                         .then(resolve, reject)
@@ -228,36 +241,21 @@
 
             return {
                 /**
-                 * Enfileira uma tarefa com prioridade opcional.
-                 * Itens de MAIOR prioridade são despachados ANTES dos de menor prioridade.
-                 * Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
+                 * Enfileira uma tarefa associada a um mod e aciona o dispatch.
+                 * A prioridade é determinada de forma DINÂMICA no momento do dispatch
+                 * (dentro de drain()), não no momento da inserção na fila.
                  *
-                 * Como funciona a inserção binária estável:
-                 *   O array é mantido em ordem decrescente de prioridade. Para inserir
-                 *   um novo item com prioridade P, avançamos enquanto o item do meio
-                 *   tem prioridade >= P (garantindo que o novo item vai APÓS todos os
-                 *   iguais — preserva a ordem de chegada dentro da mesma prioridade).
+                 * Comportamento de dispatch:
+                 *   Ao liberar um slot, drain() varre a fila e escolhe o primeiro
+                 *   mod cujo ID esteja em visibleInViewport naquele instante.
+                 *   Se nenhum mod estiver visível, despacha o mais antigo (FIFO).
                  *
-                 * Uso no contexto de scroll inteligente:
-                 *   - priority = 1: mod visível na tela (inserido na frente da fila)
-                 *   - priority = 0: mod pré-carregado mas fora da tela (enfileirado atrás)
-                 *
-                 * @param {Function} task     - Função que retorna uma Promise (a tarefa a executar).
-                 * @param {number}   priority - Prioridade numérica (maior = mais urgente; padrão 0).
+                 * @param {Function} task  - Função que retorna uma Promise (a tarefa a executar).
+                 * @param {string}   modId - ID do mod; consultado em visibleInViewport ao despachar.
                  */
-                run(task, priority = 0) {
+                run(task, modId = null) {
                     return new Promise((resolve, reject) => {
-                        const item = { task, resolve, reject, priority };
-                        // Inserção binária para manter o array em ordem decrescente de prioridade.
-                        // lo avança enquanto queue[mid].priority >= priority: garante FIFO
-                        // para itens de mesma prioridade (novo item vai após os iguais).
-                        let lo = 0, hi = queue.length;
-                        while (lo < hi) {
-                            const mid = (lo + hi) >> 1;
-                            if (queue[mid].priority >= priority) lo = mid + 1;
-                            else hi = mid;
-                        }
-                        queue.splice(lo, 0, item);
+                        queue.push({ task, resolve, reject, modId });
                         drain();
                     });
                 },
@@ -2952,7 +2950,7 @@
     /**
      * Orquestrador de requisições a Mirrors Paralelos
      */
-    async function fetchMirrorAsync(mirrorConfig, modId = null, priority = 0) {
+    async function fetchMirrorAsync(mirrorConfig, modId = null) {
         const cacheKey = mirrorConfig.type === 'per_mod' ? `${CACHE_PREFIX}Mirror_${mirrorConfig.id}_${modId}` : `${CACHE_PREFIX}Mirror_${mirrorConfig.id}`;
         const requestKey = mirrorConfig.type === 'per_mod' ? `${mirrorConfig.id}_${modId}` : mirrorConfig.id;
         const now = Date.now();
@@ -2998,10 +2996,10 @@
                 // burst de requisições simultâneas ao mesmo servidor durante scroll rápido.
                 // Mirrors full_db fazem apenas 1 requisição compartilhada (deduplicada pelo
                 // pendingMirrorRequests acima), então não precisam do semáforo.
-                // O parâmetro priority é repassado: mods visíveis na tela (priority=1)
-                // saltam na frente de mods pré-carregados ainda fora do viewport (priority=0).
+                // O modId é repassado para que drain() possa verificar visibilidade
+                // em tempo real e priorizar mods atualmente visíveis na tela.
                 const res = mirrorConfig.type === 'per_mod'
-                    ? await PerModRequestLimiter.forMirror(mirrorConfig.id).run(() => ApiClient.fetch(finalUrl), priority)
+                    ? await PerModRequestLimiter.forMirror(mirrorConfig.id).run(() => ApiClient.fetch(finalUrl), modId)
                     : await ApiClient.fetch(finalUrl);
 
                 const parsedData = mirrorConfig.type === 'per_mod' ? mirrorConfig.parser(res.responseText, modId) : mirrorConfig.parser(res.responseText);
@@ -3027,12 +3025,12 @@
     /**
      * Varre todos os espelhos e resolve se a melhor versão hospedada está em dia com a Steam.
      */
-    async function getBestModFromMirrors(modId, dateSteam, priority = 0) {
+    async function getBestModFromMirrors(modId, dateSteam) {
         const consultedMirrors = [];
         let bestOutdated = null;
 
         for (const mirrorConfig of GAME.mirrors) {
-            let mirrorCacheObj = await fetchMirrorAsync(mirrorConfig, mirrorConfig.type === 'per_mod' ? modId : null, priority);
+            let mirrorCacheObj = await fetchMirrorAsync(mirrorConfig, mirrorConfig.type === 'per_mod' ? modId : null);
             let modData = null;
 
             if (mirrorCacheObj && mirrorCacheObj.data) {
@@ -3172,13 +3170,7 @@
 
         const dateSteam = await getSteamDateAsync(modId);
 
-        // Prioridade calculada APÓS aguardar os dados da Steam (debounce 100ms + rede):
-        // nesse intervalo, o viewportVisibilityObserver já disparou e atualizou
-        // visibleInViewport, então a prioridade reflete o estado atual da tela.
-        //   priority = 1 → mod visível: salta na frente dos itens pré-carregados na fila
-        //   priority = 0 → mod pré-carregado (200px margin), ainda fora do viewport
-        const priority = visibleInViewport.has(modId) ? 1 : 0;
-        const mirrorResult = await getBestModFromMirrors(modId, dateSteam, priority);
+        const mirrorResult = await getBestModFromMirrors(modId, dateSteam);
 
         const steamCacheExp = localSteamCache[modId] ? localSteamCache[modId].exp : 0;
         const creationTimeSteam = steamCacheExp ? (steamCacheExp - CACHE_TIME_STEAM_MS) : Date.now();
@@ -3370,13 +3362,13 @@
     // atributo data-swdd-pending="true" e permanece vazio até que a câmera
     // do viewport o alcance; só então o script faz as requisições de rede.
     //
-    // Sistema de fila inteligente por prioridade (scroll-aware):
+    // Sistema de fila inteligente por prioridade dinâmica (scroll-aware):
     //   widgetVisibilityObserver (rootMargin 200px) → pré-carrega e aciona renderWidget()
     //   viewportVisibilityObserver (rootMargin 0px)  → rastreia o que está REALMENTE na tela
     //
-    // renderWidget() consulta visibleInViewport APÓS resolver a Steam (≥100ms):
-    //   • mod visível  → priority=1 → salta na frente da fila do PerModRequestLimiter
-    //   • mod pré-carregado → priority=0 → aguarda no final da fila
+    // PerModRequestLimiter usa prioridade DINÂMICA: ao liberar um slot, drain() varre
+    // a fila e despacha o primeiro mod visível em visibleInViewport naquele instante.
+    // Se nenhum mod estiver visível, usa FIFO (o mais antigo da fila).
     //
     // Resultado prático: ao rolar rapidamente para o fim de uma página longa,
     // os mods que apareceram na tela são verificados antes dos que estavam
@@ -3386,7 +3378,7 @@
     /**
      * Conjunto de mod IDs atualmente visíveis no viewport real (sem margem extra).
      * Atualizado continuamente pelo viewportVisibilityObserver.
-     * Consultado por renderWidget() e processSteamQueue() para determinar prioridade.
+     * Consultado por PerModRequestLimiter.drain() e processSteamQueue() para prioridade dinâmica.
      */
     const visibleInViewport = new Set();
 

@@ -6,11 +6,11 @@
  * Verifica que o semáforo por mirror:
  *   - Limita a concorrência a MAX_CONCURRENT por mirror
  *   - Não compartilha slots entre mirrors distintos
- *   - Respeita ordem FIFO na fila (mesma prioridade)
+ *   - Respeita ordem FIFO na fila quando nenhum mod está visível
  *   - Completa todas as tarefas sem perder nenhuma
- *   - Despacha itens de MAIOR prioridade ANTES dos de menor prioridade
- *   - Preserva FIFO dentro de itens com a MESMA prioridade
- *   - Lida corretamente com prioridades mistas (scroll inteligente)
+ *   - Despacha mods visíveis ANTES dos não visíveis (prioridade dinâmica)
+ *   - Prioridade é avaliada no momento do dispatch, não da inserção
+ *   - Corrige o bug de prioridade estática (mod visível ao inserir mas não ao despachar)
  *
  * Usa apenas Promises e setTimeout nativos do Node.js — não precisa de browser.
  *
@@ -18,6 +18,15 @@
  */
 
 'use strict';
+
+// ════════════════════════════════════════════════════════════════════════════
+// STUB: visibleInViewport (espelha o Set do script principal — MÓDULO 7.1)
+// Manipulado diretamente pelos testes para simular scroll do usuário.
+// Qualquer mudança na estrutura de visibleInViewport no script deve ser
+// refletida aqui.
+// ════════════════════════════════════════════════════════════════════════════
+
+let visibleInViewport = new Set();
 
 // ════════════════════════════════════════════════════════════════════════════
 // IMPLEMENTAÇÃO (espelha PerModRequestLimiter do script principal — MÓDULO 0.2)
@@ -39,7 +48,7 @@ const PerModRequestLimiter = (() => {
 
     function createLimiter(mirrorId) {
         let running = 0;
-        // Array mantido em ordem DECRESCENTE de prioridade; FIFO dentro da mesma.
+        // Fila FIFO: itens são inseridos no final e removidos dinamicamente.
         const queue = [];
 
         function drain() {
@@ -47,7 +56,17 @@ const PerModRequestLimiter = (() => {
                 ? mirrorConcurrency[mirrorId]
                 : MAX_CONCURRENT;
             while (running < max && queue.length > 0) {
-                const { task, resolve, reject } = queue.shift();
+                // Prioridade Dinâmica (O(n)): ao liberar um slot, varre a fila em busca
+                // do primeiro mod ATUALMENTE visível no viewport. Se nenhum estiver
+                // visível, despacha o mais antigo (FIFO — índice 0).
+                let bestIdx = 0;
+                for (let i = 0; i < queue.length; i++) {
+                    if (visibleInViewport.has(queue[i].modId)) {
+                        bestIdx = i;
+                        break;
+                    }
+                }
+                const { task, resolve, reject } = queue.splice(bestIdx, 1)[0];
                 running++;
                 task()
                     .then(resolve, reject)
@@ -57,27 +76,16 @@ const PerModRequestLimiter = (() => {
 
         return {
             /**
-             * Enfileira uma tarefa com prioridade opcional.
-             * Itens de MAIOR prioridade são despachados ANTES dos de menor prioridade.
-             * Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
+             * Enfileira uma tarefa associada a um mod e aciona o dispatch.
+             * A prioridade é determinada de forma DINÂMICA no momento do dispatch,
+             * não no momento da inserção na fila.
              *
-             * Inserção binária estável: percorre o array mantido em ordem decrescente
-             * de prioridade e insere o novo item APÓS todos os itens com prioridade
-             * igual (preserva a ordem de chegada dentro da mesma faixa).
-             *
-             * @param {Function} task     - Função que retorna uma Promise.
-             * @param {number}   priority - Prioridade numérica (maior = mais urgente; padrão 0).
+             * @param {Function} task  - Função que retorna uma Promise.
+             * @param {string}   modId - ID do mod; consultado em visibleInViewport ao despachar.
              */
-            run(task, priority = 0) {
+            run(task, modId = null) {
                 return new Promise((resolve, reject) => {
-                    const item = { task, resolve, reject, priority };
-                    let lo = 0, hi = queue.length;
-                    while (lo < hi) {
-                        const mid = (lo + hi) >> 1;
-                        if (queue[mid].priority >= priority) lo = mid + 1;
-                        else hi = mid;
-                    }
-                    queue.splice(lo, 0, item);
+                    queue.push({ task, resolve, reject, modId });
                     drain();
                 });
             },
@@ -140,7 +148,6 @@ async function checkFifoOrder({ mirrorId, extraTasks = 4 }) {
     const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
     // Bloqueia TODOS os slots com tarefas longas para forçar enfileiramento real.
-    // mirrorConcurrency é sobrescrito localmente neste helper para usar QUEUE_TEST_CONCURRENT.
     mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
 
     const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
@@ -148,61 +155,68 @@ async function checkFifoOrder({ mirrorId, extraTasks = 4 }) {
     );
 
     const order = [];
+    // Nenhum mod visível → deve preservar FIFO
     const enqueued = Array.from({ length: extraTasks }, (_, i) =>
-        limiter.run(async () => { order.push(i); })
+        limiter.run(async () => { order.push(i); }, `mod-fifo-${i}`)
     );
 
     await Promise.all([...blockers, ...enqueued]);
-    delete mirrorConcurrency[mirrorId]; // restaura o padrão
+    delete mirrorConcurrency[mirrorId];
     return { order };
 }
 
 /**
- * Satura todos os slots e verifica que um item de MAIOR prioridade inserido
- * após um de MENOR prioridade é despachado primeiro quando um slot abre.
+ * Verifica a prioridade dinâmica: insere dois mods na fila, depois muda a
+ * visibilidade. O mod que ficar visível ao despachar deve ser servido primeiro,
+ * independente da ordem de inserção ou visibilidade no momento da inserção.
  *
- * Cenário de scroll inteligente:
- *   1. Todos os slots estão ocupados (mods do topo da página em verificação).
- *   2. Dois itens entram na fila: primeiro o "low" (priority=0), depois o "high" (priority=1).
- *   3. Ao liberar um slot, "high" deve rodar antes de "low".
+ * Cenário:
+ *   1. Slot único bloqueado.
+ *   2. modA entra na fila enquanto visível.
+ *   3. modB entra na fila enquanto NÃO visível.
+ *   4. Visibilidade muda: modA sai do viewport, modB entra.
+ *   5. Slot liberado → drain deve despachar modB (visível agora).
  */
-async function checkPriorityOrder({ mirrorId }) {
+async function checkDynamicPriorityOnVisibilityChange({ mirrorId }) {
     mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
     const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
-    // Controle manual: resolvemos os blockers um a um de forma determinística.
     const blockerResolvers = [];
     const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
         limiter.run(() => new Promise(res => blockerResolvers.push(res)))
     );
 
-    // Aguarda todos os blockers estarem rodando (slots cheios) antes de enfileirar.
     await new Promise(res => setTimeout(res, 0));
 
+    // modA visível ao entrar na fila
+    visibleInViewport.add('modA');
     const order = [];
-    // Enfileira PRIMEIRO o de baixa prioridade, DEPOIS o de alta.
-    // Com FIFO puro (sem prioridade) sairia ['low', 'high'].
-    // Com prioridade correta deve sair ['high', 'low'].
-    const lowTask  = limiter.run(async () => { order.push('low');  }, 0);
-    const highTask = limiter.run(async () => { order.push('high'); }, 1);
+    const taskA = limiter.run(async () => { order.push('A'); }, 'modA');
 
-    // Libera um slot → deve escolher 'high' (priority=1)
+    // modB NÃO visível ao entrar
+    visibleInViewport.delete('modA');
+    const taskB = limiter.run(async () => { order.push('B'); }, 'modB');
+
+    // Visibilidade muda: modA sai, modB entra
+    visibleInViewport.add('modB');
+
+    // Libera um slot → drain escolhe modB (visível agora)
     blockerResolvers[0]();
-    await highTask;
+    await taskB;
 
     // Libera restante
     for (let i = 1; i < blockerResolvers.length; i++) blockerResolvers[i]();
-    await Promise.all([lowTask, ...blockers]);
+    await Promise.all([taskA, ...blockers]);
 
     delete mirrorConcurrency[mirrorId];
     return { order };
 }
 
 /**
- * Verifica que FIFO é preservado DENTRO de itens com a MESMA prioridade.
- * Insere vários itens com priority=1; todos devem sair em ordem de inserção.
+ * Verifica FIFO quando nenhum mod está visível: drain deve despachar na
+ * ordem de inserção (índice 0 primeiro).
  */
-async function checkFifoWithinSamePriority({ mirrorId, count = 4 }) {
+async function checkFifoWhenNothingVisible({ mirrorId, count = 4 }) {
     mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
     const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
@@ -214,8 +228,9 @@ async function checkFifoWithinSamePriority({ mirrorId, count = 4 }) {
     await new Promise(res => setTimeout(res, 0));
 
     const order = [];
+    // Nenhum modId visível — todos com id único para garantir que a varredura não encurte
     const tasks = Array.from({ length: count }, (_, i) =>
-        limiter.run(async () => { order.push(i); }, 1)
+        limiter.run(async () => { order.push(i); }, `invisible-mod-${i}`)
     );
 
     blockerResolvers.forEach(res => res());
@@ -226,10 +241,10 @@ async function checkFifoWithinSamePriority({ mirrorId, count = 4 }) {
 }
 
 /**
- * Verifica prioridades mistas: insere baixo, alto, baixo, alto — os dois altos
- * devem ser despachados antes dos dois baixos.
+ * Verifica que o mod visível inserido DEPOIS de outros não visíveis ainda
+ * é despachado primeiro (visibilidade vence a ordem de inserção).
  */
-async function checkMixedPriorityOrder({ mirrorId }) {
+async function checkVisibleWinsOverInsertionOrder({ mirrorId }) {
     mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
     const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
@@ -241,13 +256,51 @@ async function checkMixedPriorityOrder({ mirrorId }) {
     await new Promise(res => setTimeout(res, 0));
 
     const order = [];
-    const t1 = limiter.run(async () => { order.push('low-1');  }, 0);
-    const t2 = limiter.run(async () => { order.push('high-1'); }, 1);
-    const t3 = limiter.run(async () => { order.push('low-2');  }, 0);
-    const t4 = limiter.run(async () => { order.push('high-2'); }, 1);
+    // Insere 3 não-visíveis, depois 1 visível
+    const t1 = limiter.run(async () => { order.push('invisible-1'); }, 'inv1');
+    const t2 = limiter.run(async () => { order.push('invisible-2'); }, 'inv2');
+    const t3 = limiter.run(async () => { order.push('invisible-3'); }, 'inv3');
+    visibleInViewport.add('vis1');
+    const t4 = limiter.run(async () => { order.push('visible-1'); }, 'vis1');
+
+    // Libera um slot → drain deve escolher 'visible-1'
+    blockerResolvers[0]();
+    await t4;
+
+    for (let i = 1; i < blockerResolvers.length; i++) blockerResolvers[i]();
+    await Promise.all([t1, t2, t3, ...blockers]);
+
+    delete mirrorConcurrency[mirrorId];
+    return { order };
+}
+
+/**
+ * Com vários mods visíveis, o PRIMEIRO visível na fila (mais antigo) é despachado
+ * antes dos demais visíveis, preservando FIFO entre visíveis.
+ */
+async function checkFifoAmongVisibleMods({ mirrorId }) {
+    mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
+    const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+    const blockerResolvers = [];
+    const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
+        limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+    );
+
+    await new Promise(res => setTimeout(res, 0));
+
+    const order = [];
+    // Insere 1 não-visível, depois 3 visíveis, em ordem
+    const tInv = limiter.run(async () => { order.push('inv'); }, 'inv');
+    visibleInViewport.add('visA');
+    visibleInViewport.add('visB');
+    visibleInViewport.add('visC');
+    const tA = limiter.run(async () => { order.push('A'); }, 'visA');
+    const tB = limiter.run(async () => { order.push('B'); }, 'visB');
+    const tC = limiter.run(async () => { order.push('C'); }, 'visC');
 
     blockerResolvers.forEach(res => res());
-    await Promise.all([...blockers, t1, t2, t3, t4]);
+    await Promise.all([...blockers, tInv, tA, tB, tC]);
 
     delete mirrorConcurrency[mirrorId];
     return { order };
@@ -260,6 +313,7 @@ async function checkMixedPriorityOrder({ mirrorId }) {
 beforeEach(() => {
     PerModRequestLimiter._reset();
     for (const k in mirrorConcurrency) delete mirrorConcurrency[k];
+    visibleInViewport.clear();
 });
 
 // ── BLOCO 1: Limite de concorrência ──────────────────────────────────────────
@@ -330,15 +384,15 @@ describe('Independência entre mirrors', () => {
     });
 });
 
-// ── BLOCO 4: Ordem FIFO (prioridade igual = 0) ───────────────────────────────
+// ── BLOCO 4: Ordem FIFO quando nenhum mod está visível ───────────────────────
 
-describe('Ordem FIFO', () => {
-    test('tarefas enfileiradas com mesma prioridade saem em ordem de inserção', async () => {
+describe('Ordem FIFO (sem mods visíveis)', () => {
+    test('tarefas enfileiradas sem visibilidade saem em ordem de inserção', async () => {
         const { order } = await checkFifoOrder({ mirrorId: 'fifo_mirror', extraTasks: 4 });
         expect(order).toEqual([0, 1, 2, 3]);
     });
 
-    test('run() sem priority equivale a FIFO puro — compatibilidade retroativa', async () => {
+    test('run() sem modId equivale a FIFO puro — compatibilidade retroativa', async () => {
         const { order } = await checkFifoOrder({ mirrorId: 'compat_fifo_mirror', extraTasks: 3 });
         expect(order).toEqual([0, 1, 2]);
     });
@@ -355,34 +409,47 @@ describe('Estado interno do limiter', () => {
     });
 });
 
-// ── BLOCO 6: Prioridade — fila inteligente de scroll ─────────────────────────
+// ── BLOCO 6: Prioridade Dinâmica — fila inteligente de scroll ─────────────────
 //
-// Estes testes verificam o comportamento de fila inteligente implementado para
-// permitir que mods visíveis na tela (priority=1) saltem na frente de mods
-// pré-carregados ainda fora do viewport (priority=0), eliminando a espera
-// ao rolar rapidamente para o final de uma página com muitos mods.
+// Estes testes verificam o comportamento de fila inteligente com PRIORIDADE
+// DINÂMICA: a visibilidade é avaliada no momento do dispatch (dentro de drain()),
+// não no momento da inserção na fila.
+//
+// Bug corrigido: com prioridade estática, um mod que era visível ao entrar na
+// fila mantinha sua posição mesmo após o usuário rolar para fora — e mods que
+// o usuário passava a olhar ficavam presos no final da fila.
 
-describe('Prioridade (fila inteligente de scroll)', () => {
-    test('item de alta prioridade salta na frente do de baixa prioridade', async () => {
-        const { order } = await checkPriorityOrder({ mirrorId: 'scroll_priority_a' });
-        // 'high' (priority=1) foi inserido DEPOIS de 'low' (priority=0),
-        // mas deve ser despachado ANTES — comportamento de fila inteligente.
-        expect(order).toEqual(['high', 'low']);
+describe('Prioridade Dinâmica (fila inteligente de scroll)', () => {
+    test('mod visível ao despachar salta na frente de mod não visível — mesmo inserido depois', async () => {
+        const { order } = await checkVisibleWinsOverInsertionOrder({ mirrorId: 'dyn_priority_a' });
+        // 'visible-1' (vis1) foi inserido APÓS os 3 invisíveis,
+        // mas deve ser despachado PRIMEIRO (visível no momento do dispatch).
+        expect(order[0]).toBe('visible-1');
     });
 
-    test('FIFO é preservado dentro de itens com a mesma prioridade', async () => {
-        const { order } = await checkFifoWithinSamePriority({
-            mirrorId: 'scroll_priority_b',
-            count: 4,
-        });
-        // Todos com priority=1 → ordem de inserção (0,1,2,3) deve ser preservada.
+    test('FIFO é preservado entre mods visíveis (mais antigo visível sai primeiro)', async () => {
+        const { order } = await checkFifoAmongVisibleMods({ mirrorId: 'dyn_priority_b' });
+        // A, B, C são todos visíveis e inseridos nessa ordem → devem sair nessa ordem.
+        // 'inv' (não visível) deve sair POR ÚLTIMO.
+        const visibles = order.filter(x => x !== 'inv');
+        expect(visibles).toEqual(['A', 'B', 'C']);
+        expect(order[order.length - 1]).toBe('inv');
+    });
+
+    test('FIFO puro quando nenhum mod está visível (fallback correto)', async () => {
+        const { order } = await checkFifoWhenNothingVisible({ mirrorId: 'dyn_priority_c', count: 4 });
+        // Sem nenhum mod visível, drain usa FIFO → ordem de inserção
         expect(order).toEqual([0, 1, 2, 3]);
     });
 
-    test('prioridades mistas — todos os alta prioridade antes dos baixa prioridade', async () => {
-        const { order } = await checkMixedPriorityOrder({ mirrorId: 'scroll_priority_c' });
-        // Inserção: low-1 (0), high-1 (1), low-2 (0), high-2 (1)
-        // Esperado: high-1, high-2 (priority=1, FIFO) → low-1, low-2 (priority=0, FIFO)
-        expect(order).toEqual(['high-1', 'high-2', 'low-1', 'low-2']);
+    test('BUG CORRIGIDO: prioridade reavaliada no dispatch — não congela na inserção', async () => {
+        // Cenário do bug original (prioridade estática):
+        //   modA é inserido enquanto VISÍVEL → teria prioridade alta congelada
+        //   modB é inserido enquanto NÃO VISÍVEL → teria prioridade baixa congelada
+        //   Usuário rola: modA sai do viewport, modB entra
+        //   Com estática: modA seria despachado primeiro (prioridade congelada = alta) ← ERRADO
+        //   Com dinâmica: modB é despachado primeiro (visível no momento do dispatch) ← CORRETO
+        const { order } = await checkDynamicPriorityOnVisibilityChange({ mirrorId: 'bug_repro' });
+        expect(order).toEqual(['B', 'A']);
     });
 });
