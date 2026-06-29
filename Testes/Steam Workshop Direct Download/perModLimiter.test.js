@@ -6,8 +6,11 @@
  * Verifica que o semáforo por mirror:
  *   - Limita a concorrência a MAX_CONCURRENT por mirror
  *   - Não compartilha slots entre mirrors distintos
- *   - Respeita ordem FIFO na fila
+ *   - Respeita ordem FIFO na fila (mesma prioridade)
  *   - Completa todas as tarefas sem perder nenhuma
+ *   - Despacha itens de MAIOR prioridade ANTES dos de menor prioridade
+ *   - Preserva FIFO dentro de itens com a MESMA prioridade
+ *   - Lida corretamente com prioridades mistas (scroll inteligente)
  *
  * Usa apenas Promises e setTimeout nativos do Node.js — não precisa de browser.
  *
@@ -17,20 +20,33 @@
 'use strict';
 
 // ════════════════════════════════════════════════════════════════════════════
-// IMPLEMENTAÇÃO (espelha PerModRequestLimiter do script principal)
+// IMPLEMENTAÇÃO (espelha PerModRequestLimiter do script principal — MÓDULO 0.2)
+// Qualquer mudança no módulo 0.2 do script principal deve ser replicada aqui.
 // ════════════════════════════════════════════════════════════════════════════
 
 const MAX_CONCURRENT = 10;
+// Valor reduzido para forçar enfileiramento real nos testes de FIFO e prioridade.
+// Com 10 slots, tarefas raramente ficam na fila durante os testes.
+// Os testes de limite usam toBeLessThanOrEqual(MAX_CONCURRENT=10), portanto
+// um pico máximo de QUEUE_TEST_CONCURRENT ainda satisfaz as asserções existentes.
+const QUEUE_TEST_CONCURRENT = 3;
+
+// Stub: sem configuração salva nos testes
+const mirrorConcurrency = {};
 
 const PerModRequestLimiter = (() => {
     const limiters = {};
 
-    function createLimiter() {
+    function createLimiter(mirrorId) {
         let running = 0;
+        // Array mantido em ordem DECRESCENTE de prioridade; FIFO dentro da mesma.
         const queue = [];
 
         function drain() {
-            while (running < MAX_CONCURRENT && queue.length > 0) {
+            const max = mirrorConcurrency[mirrorId] != null
+                ? mirrorConcurrency[mirrorId]
+                : MAX_CONCURRENT;
+            while (running < max && queue.length > 0) {
                 const { task, resolve, reject } = queue.shift();
                 running++;
                 task()
@@ -40,20 +56,39 @@ const PerModRequestLimiter = (() => {
         }
 
         return {
-            run(task) {
+            /**
+             * Enfileira uma tarefa com prioridade opcional.
+             * Itens de MAIOR prioridade são despachados ANTES dos de menor prioridade.
+             * Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
+             *
+             * Inserção binária estável: percorre o array mantido em ordem decrescente
+             * de prioridade e insere o novo item APÓS todos os itens com prioridade
+             * igual (preserva a ordem de chegada dentro da mesma faixa).
+             *
+             * @param {Function} task     - Função que retorna uma Promise.
+             * @param {number}   priority - Prioridade numérica (maior = mais urgente; padrão 0).
+             */
+            run(task, priority = 0) {
                 return new Promise((resolve, reject) => {
-                    queue.push({ task, resolve, reject });
+                    const item = { task, resolve, reject, priority };
+                    let lo = 0, hi = queue.length;
+                    while (lo < hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (queue[mid].priority >= priority) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    queue.splice(lo, 0, item);
                     drain();
                 });
             },
-            _getRunning()      { return running; },
-            _getQueueLength()  { return queue.length; },
+            _getRunning()     { return running; },
+            _getQueueLength() { return queue.length; },
         };
     }
 
     return {
         forMirror(mirrorId) {
-            if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter();
+            if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter(mirrorId);
             return limiters[mirrorId];
         },
         _reset() { for (const k in limiters) delete limiters[k]; },
@@ -104,7 +139,11 @@ async function mirrorsAreIndependent({ mirrorA, mirrorB, taskDurationMs = 80 }) 
 async function checkFifoOrder({ mirrorId, extraTasks = 4 }) {
     const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
-    const blockers = Array.from({ length: MAX_CONCURRENT }, () =>
+    // Bloqueia TODOS os slots com tarefas longas para forçar enfileiramento real.
+    // mirrorConcurrency é sobrescrito localmente neste helper para usar QUEUE_TEST_CONCURRENT.
+    mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
+
+    const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
         limiter.run(() => fakeRequest(100))
     );
 
@@ -114,6 +153,103 @@ async function checkFifoOrder({ mirrorId, extraTasks = 4 }) {
     );
 
     await Promise.all([...blockers, ...enqueued]);
+    delete mirrorConcurrency[mirrorId]; // restaura o padrão
+    return { order };
+}
+
+/**
+ * Satura todos os slots e verifica que um item de MAIOR prioridade inserido
+ * após um de MENOR prioridade é despachado primeiro quando um slot abre.
+ *
+ * Cenário de scroll inteligente:
+ *   1. Todos os slots estão ocupados (mods do topo da página em verificação).
+ *   2. Dois itens entram na fila: primeiro o "low" (priority=0), depois o "high" (priority=1).
+ *   3. Ao liberar um slot, "high" deve rodar antes de "low".
+ */
+async function checkPriorityOrder({ mirrorId }) {
+    mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
+    const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+    // Controle manual: resolvemos os blockers um a um de forma determinística.
+    const blockerResolvers = [];
+    const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
+        limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+    );
+
+    // Aguarda todos os blockers estarem rodando (slots cheios) antes de enfileirar.
+    await new Promise(res => setTimeout(res, 0));
+
+    const order = [];
+    // Enfileira PRIMEIRO o de baixa prioridade, DEPOIS o de alta.
+    // Com FIFO puro (sem prioridade) sairia ['low', 'high'].
+    // Com prioridade correta deve sair ['high', 'low'].
+    const lowTask  = limiter.run(async () => { order.push('low');  }, 0);
+    const highTask = limiter.run(async () => { order.push('high'); }, 1);
+
+    // Libera um slot → deve escolher 'high' (priority=1)
+    blockerResolvers[0]();
+    await highTask;
+
+    // Libera restante
+    for (let i = 1; i < blockerResolvers.length; i++) blockerResolvers[i]();
+    await Promise.all([lowTask, ...blockers]);
+
+    delete mirrorConcurrency[mirrorId];
+    return { order };
+}
+
+/**
+ * Verifica que FIFO é preservado DENTRO de itens com a MESMA prioridade.
+ * Insere vários itens com priority=1; todos devem sair em ordem de inserção.
+ */
+async function checkFifoWithinSamePriority({ mirrorId, count = 4 }) {
+    mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
+    const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+    const blockerResolvers = [];
+    const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
+        limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+    );
+
+    await new Promise(res => setTimeout(res, 0));
+
+    const order = [];
+    const tasks = Array.from({ length: count }, (_, i) =>
+        limiter.run(async () => { order.push(i); }, 1)
+    );
+
+    blockerResolvers.forEach(res => res());
+    await Promise.all([...blockers, ...tasks]);
+
+    delete mirrorConcurrency[mirrorId];
+    return { order };
+}
+
+/**
+ * Verifica prioridades mistas: insere baixo, alto, baixo, alto — os dois altos
+ * devem ser despachados antes dos dois baixos.
+ */
+async function checkMixedPriorityOrder({ mirrorId }) {
+    mirrorConcurrency[mirrorId] = QUEUE_TEST_CONCURRENT;
+    const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+    const blockerResolvers = [];
+    const blockers = Array.from({ length: QUEUE_TEST_CONCURRENT }, () =>
+        limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+    );
+
+    await new Promise(res => setTimeout(res, 0));
+
+    const order = [];
+    const t1 = limiter.run(async () => { order.push('low-1');  }, 0);
+    const t2 = limiter.run(async () => { order.push('high-1'); }, 1);
+    const t3 = limiter.run(async () => { order.push('low-2');  }, 0);
+    const t4 = limiter.run(async () => { order.push('high-2'); }, 1);
+
+    blockerResolvers.forEach(res => res());
+    await Promise.all([...blockers, t1, t2, t3, t4]);
+
+    delete mirrorConcurrency[mirrorId];
     return { order };
 }
 
@@ -121,7 +257,10 @@ async function checkFifoOrder({ mirrorId, extraTasks = 4 }) {
 // TESTES
 // ════════════════════════════════════════════════════════════════════════════
 
-beforeEach(() => { PerModRequestLimiter._reset(); });
+beforeEach(() => {
+    PerModRequestLimiter._reset();
+    for (const k in mirrorConcurrency) delete mirrorConcurrency[k];
+});
 
 // ── BLOCO 1: Limite de concorrência ──────────────────────────────────────────
 
@@ -191,12 +330,17 @@ describe('Independência entre mirrors', () => {
     });
 });
 
-// ── BLOCO 4: Ordem FIFO ───────────────────────────────────────────────────────
+// ── BLOCO 4: Ordem FIFO (prioridade igual = 0) ───────────────────────────────
 
 describe('Ordem FIFO', () => {
-    test('tarefas enfileiradas são despachadas em ordem FIFO', async () => {
+    test('tarefas enfileiradas com mesma prioridade saem em ordem de inserção', async () => {
         const { order } = await checkFifoOrder({ mirrorId: 'fifo_mirror', extraTasks: 4 });
         expect(order).toEqual([0, 1, 2, 3]);
+    });
+
+    test('run() sem priority equivale a FIFO puro — compatibilidade retroativa', async () => {
+        const { order } = await checkFifoOrder({ mirrorId: 'compat_fifo_mirror', extraTasks: 3 });
+        expect(order).toEqual([0, 1, 2]);
     });
 });
 
@@ -208,5 +352,37 @@ describe('Estado interno do limiter', () => {
         const limiter = PerModRequestLimiter.forMirror('state_mirror');
         expect(limiter._getRunning()).toBe(0);
         expect(limiter._getQueueLength()).toBe(0);
+    });
+});
+
+// ── BLOCO 6: Prioridade — fila inteligente de scroll ─────────────────────────
+//
+// Estes testes verificam o comportamento de fila inteligente implementado para
+// permitir que mods visíveis na tela (priority=1) saltem na frente de mods
+// pré-carregados ainda fora do viewport (priority=0), eliminando a espera
+// ao rolar rapidamente para o final de uma página com muitos mods.
+
+describe('Prioridade (fila inteligente de scroll)', () => {
+    test('item de alta prioridade salta na frente do de baixa prioridade', async () => {
+        const { order } = await checkPriorityOrder({ mirrorId: 'scroll_priority_a' });
+        // 'high' (priority=1) foi inserido DEPOIS de 'low' (priority=0),
+        // mas deve ser despachado ANTES — comportamento de fila inteligente.
+        expect(order).toEqual(['high', 'low']);
+    });
+
+    test('FIFO é preservado dentro de itens com a mesma prioridade', async () => {
+        const { order } = await checkFifoWithinSamePriority({
+            mirrorId: 'scroll_priority_b',
+            count: 4,
+        });
+        // Todos com priority=1 → ordem de inserção (0,1,2,3) deve ser preservada.
+        expect(order).toEqual([0, 1, 2, 3]);
+    });
+
+    test('prioridades mistas — todos os alta prioridade antes dos baixa prioridade', async () => {
+        const { order } = await checkMixedPriorityOrder({ mirrorId: 'scroll_priority_c' });
+        // Inserção: low-1 (0), high-1 (1), low-2 (0), high-2 (1)
+        // Esperado: high-1, high-2 (priority=1, FIFO) → low-1, low-2 (priority=0, FIFO)
+        expect(order).toEqual(['high-1', 'high-2', 'low-1', 'low-2']);
     });
 });

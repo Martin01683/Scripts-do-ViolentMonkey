@@ -9,19 +9,29 @@
 'use strict';
 
 // =========================================================================
-// Cópia exata do PerModRequestLimiter do script principal.
+// Cópia fiel do PerModRequestLimiter do script principal (MÓDULO 0.2).
 // Qualquer mudança no módulo 0.2 do script principal deve ser replicada aqui.
+//
+// DEFAULT_CONCURRENT = 3 (em vez de 10 do script principal) para que os
+// testes de FIFO e de prioridade precisem enfileirar tarefas de verdade —
+// com 10 slots a maioria das tarefas iniciaria imediatamente sem enfileirar.
+// As asserções de peakRunning usam toBeLessThanOrEqual(MAX_CONCURRENT = 10),
+// portanto um pico máximo de 3 ainda satisfaz todas as checagens de limite.
 // =========================================================================
+const mirrorConcurrency = {}; // stub: sem configuração salva nos testes
+const DEFAULT_CONCURRENT = 3; // valor reduzido para forçar enfileiramento
+
 const PerModRequestLimiter = (() => {
-    const MAX_CONCURRENT = 10;
     const limiters = {};
 
-    function createLimiter() {
+    function createLimiter(mirrorId) {
         let running = 0;
+        // Array mantido em ordem DECRESCENTE de prioridade; FIFO dentro da mesma.
         const queue = [];
 
         function drain() {
-            while (running < MAX_CONCURRENT && queue.length > 0) {
+            const max = (mirrorConcurrency[mirrorId] != null ? mirrorConcurrency[mirrorId] : DEFAULT_CONCURRENT);
+            while (running < max && queue.length > 0) {
                 const { task, resolve, reject } = queue.shift();
                 running++;
                 task()
@@ -31,12 +41,24 @@ const PerModRequestLimiter = (() => {
         }
 
         return {
-            run(task) {
+            /**
+             * Enfileira uma tarefa com prioridade opcional.
+             * Maior prioridade → despachado antes. FIFO para prioridades iguais.
+             */
+            run(task, priority = 0) {
                 return new Promise((resolve, reject) => {
-                    queue.push({ task, resolve, reject });
+                    const item = { task, resolve, reject, priority };
+                    let lo = 0, hi = queue.length;
+                    while (lo < hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (queue[mid].priority >= priority) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    queue.splice(lo, 0, item);
                     drain();
                 });
             },
+            drain,
             _getRunning() { return running; },
             _getQueueLength() { return queue.length; }
         };
@@ -44,7 +66,7 @@ const PerModRequestLimiter = (() => {
 
     return {
         forMirror(mirrorId) {
-            if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter();
+            if (!limiters[mirrorId]) limiters[mirrorId] = createLimiter(mirrorId);
             return limiters[mirrorId];
         }
     };
@@ -54,10 +76,7 @@ const PerModRequestLimiter = (() => {
 // Helpers de teste
 // =========================================================================
 
-/**
- * Simula uma requisição de rede com duração controlada.
- * Retorna uma Promise que resolve após `durationMs`.
- */
+/** Simula uma requisição de rede com duração controlada. */
 function fakeRequest(durationMs) {
     return new Promise(resolve => setTimeout(resolve, durationMs));
 }
@@ -91,7 +110,12 @@ async function runConcurrent({ mirrorId, count, taskDurationMs = 50 }) {
 // API pública para os testes Playwright
 // =========================================================================
 window.__limiterTest__ = {
-    MAX_CONCURRENT: 2,
+    /**
+     * Limite de concorrência usado nos helpers abaixo para bloquear TODOS os slots.
+     * Deve coincidir com DEFAULT_CONCURRENT acima para que os bloqueadores saturem
+     * a fila e forcem enfileiramento real nos testes de FIFO e prioridade.
+     */
+    MAX_CONCURRENT: DEFAULT_CONCURRENT,
 
     /** Pico de concorrência ao rodar N tarefas simultâneas no mesmo mirror. */
     runConcurrent,
@@ -107,12 +131,11 @@ window.__limiterTest__ = {
      * mirror A ocupado não bloqueia mirror B.
      */
     async mirrorsAreIndependent({ mirrorA, mirrorB, taskDurationMs = 80 }) {
-        const completions = [];
         const limiterA = PerModRequestLimiter.forMirror(mirrorA);
         const limiterB = PerModRequestLimiter.forMirror(mirrorB);
 
-        // Ocupa todos os slots do mirror A com tarefas longas
-        const blockersA = Array.from({ length: MAX_CONCURRENT }, () =>
+        // Ocupa TODOS os slots do mirror A com tarefas longas
+        const blockersA = Array.from({ length: DEFAULT_CONCURRENT }, () =>
             limiterA.run(() => fakeRequest(taskDurationMs))
         );
 
@@ -126,24 +149,123 @@ window.__limiterTest__ = {
     },
 
     /**
-     * Verifica a ordem FIFO: tarefas enfileiradas devem ser despachadas
-     * na ordem em que foram submetidas.
+     * Verifica a ordem FIFO: tarefas enfileiradas (mesma prioridade = 0) devem
+     * ser despachadas na ordem em que foram submetidas.
+     * Bloqueia TODOS os slots para forçar enfileiramento real.
      */
     async checkFifoOrder({ mirrorId, extraTasks = 4 }) {
         const limiter = PerModRequestLimiter.forMirror(mirrorId);
 
-        // Bloqueia os slots com tarefas longas
-        const blockers = Array.from({ length: MAX_CONCURRENT }, () =>
+        // Bloqueia TODOS os slots com tarefas longas para forçar enfileiramento
+        const blockers = Array.from({ length: DEFAULT_CONCURRENT }, () =>
             limiter.run(() => fakeRequest(100))
         );
 
-        // Enfileira tarefas adicionais
+        // Enfileira tarefas adicionais com prioridade padrão (0) — devem sair em FIFO
         const order = [];
         const enqueued = Array.from({ length: extraTasks }, (_, i) =>
             limiter.run(async () => { order.push(i); })
         );
 
         await Promise.all([...blockers, ...enqueued]);
+        return { order };
+    },
+
+    /**
+     * Verifica que itens de MAIOR prioridade são despachados ANTES de itens
+     * de menor prioridade, independentemente da ordem de inserção na fila.
+     *
+     * Cenário de scroll inteligente (equivalente a rolar a página para baixo):
+     *   1. Todos os slots estão ocupados com tarefas em andamento (simulando mods
+     *      do topo da página já em verificação).
+     *   2. Dois novos itens são enfileirados: primeiro o de baixa prioridade (0),
+     *      depois o de alta prioridade (1) — representando o mod que acabou de
+     *      aparecer na tela do usuário.
+     *   3. Ao liberar um slot, o de alta prioridade deve rodar ANTES do baixo.
+     */
+    async checkPriorityOrder({ mirrorId = 'priority_mirror' }) {
+        const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+        // Controle manual dos blockers: usamos resolvers externos para liberá-los
+        // um a um de forma determinística.
+        const blockerResolvers = [];
+        const blockers = Array.from({ length: DEFAULT_CONCURRENT }, () =>
+            limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+        );
+
+        // Garante que os blockers estão todos rodando (slots cheios) antes de enfileirar
+        await new Promise(res => setTimeout(res, 0));
+
+        // Enfileira: PRIMEIRO o de baixa prioridade, DEPOIS o de alta prioridade.
+        // Com prioridade ignorada (FIFO puro), sairia ['low', 'high'].
+        // Com prioridade correta, deve sair ['high', 'low'].
+        const order = [];
+        const lowTask  = limiter.run(async () => { order.push('low');  }, 0);
+        const highTask = limiter.run(async () => { order.push('high'); }, 1);
+
+        // Libera um slot → deve escolher 'high' (priority=1)
+        blockerResolvers[0]();
+        await highTask;
+
+        // Libera restante → roda 'low' + termina blockers
+        for (let i = 1; i < blockerResolvers.length; i++) blockerResolvers[i]();
+        await Promise.all([lowTask, ...blockers]);
+
+        return { order };
+    },
+
+    /**
+     * Verifica que FIFO é preservado DENTRO de itens com a MESMA prioridade.
+     * Insere vários itens com priority=1; todos devem sair em ordem de inserção.
+     */
+    async checkFifoWithinSamePriority({ mirrorId = 'fifo_priority_mirror', count = 4 }) {
+        const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+        // Bloqueia todos os slots
+        const blockerResolvers = [];
+        const blockers = Array.from({ length: DEFAULT_CONCURRENT }, () =>
+            limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+        );
+
+        await new Promise(res => setTimeout(res, 0));
+
+        // Enfileira 'count' itens com priority=1 em sequência
+        const order = [];
+        const tasks = Array.from({ length: count }, (_, i) =>
+            limiter.run(async () => { order.push(i); }, 1)
+        );
+
+        // Libera todos os blockers e aguarda conclusão
+        blockerResolvers.forEach(res => res());
+        await Promise.all([...blockers, ...tasks]);
+
+        return { order };
+    },
+
+    /**
+     * Verifica o cenário completo de scroll: prioridades mistas na fila.
+     * Mistura itens de priority=0 e priority=1; os de priority=1 devem vir primeiro.
+     */
+    async checkMixedPriorityOrder({ mirrorId = 'mixed_priority_mirror' }) {
+        const limiter = PerModRequestLimiter.forMirror(mirrorId);
+
+        const blockerResolvers = [];
+        const blockers = Array.from({ length: DEFAULT_CONCURRENT }, () =>
+            limiter.run(() => new Promise(res => blockerResolvers.push(res)))
+        );
+
+        await new Promise(res => setTimeout(res, 0));
+
+        // Enfileira: baixo, alto, baixo, alto — resultado esperado: alto, alto, baixo, baixo
+        const order = [];
+        const t1 = limiter.run(async () => { order.push('low-1');  }, 0);
+        const t2 = limiter.run(async () => { order.push('high-1'); }, 1);
+        const t3 = limiter.run(async () => { order.push('low-2');  }, 0);
+        const t4 = limiter.run(async () => { order.push('high-2'); }, 1);
+
+        blockerResolvers.forEach(res => res());
+        await Promise.all([...blockers, t1, t2, t3, t4]);
+
         return { order };
     },
 

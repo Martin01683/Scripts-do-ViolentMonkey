@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Steam Workshop Direct Download
 // @namespace    http://tampermonkey.net/
-// @version      26.06.27.01
+// @version      26.06.28.01
 // @description  Download direto de mods do Steam Workshop via mirrors, com detecção automática de jogo.
 // @match        https://steamcommunity.com/sharedfiles/filedetails/?id=*
 // @match        https://steamcommunity.com/workshop/filedetails/?id=*
@@ -209,6 +209,8 @@
 
         function createLimiter(mirrorId) {
             let running = 0;
+            // Array mantido em ordem DECRESCENTE de prioridade.
+            // Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
             const queue = [];
 
             function drain() {
@@ -225,9 +227,37 @@
             }
 
             return {
-                run(task) {
+                /**
+                 * Enfileira uma tarefa com prioridade opcional.
+                 * Itens de MAIOR prioridade são despachados ANTES dos de menor prioridade.
+                 * Dentro da mesma prioridade, a ordem é FIFO (ordem de inserção).
+                 *
+                 * Como funciona a inserção binária estável:
+                 *   O array é mantido em ordem decrescente de prioridade. Para inserir
+                 *   um novo item com prioridade P, avançamos enquanto o item do meio
+                 *   tem prioridade >= P (garantindo que o novo item vai APÓS todos os
+                 *   iguais — preserva a ordem de chegada dentro da mesma prioridade).
+                 *
+                 * Uso no contexto de scroll inteligente:
+                 *   - priority = 1: mod visível na tela (inserido na frente da fila)
+                 *   - priority = 0: mod pré-carregado mas fora da tela (enfileirado atrás)
+                 *
+                 * @param {Function} task     - Função que retorna uma Promise (a tarefa a executar).
+                 * @param {number}   priority - Prioridade numérica (maior = mais urgente; padrão 0).
+                 */
+                run(task, priority = 0) {
                     return new Promise((resolve, reject) => {
-                        queue.push({ task, resolve, reject });
+                        const item = { task, resolve, reject, priority };
+                        // Inserção binária para manter o array em ordem decrescente de prioridade.
+                        // lo avança enquanto queue[mid].priority >= priority: garante FIFO
+                        // para itens de mesma prioridade (novo item vai após os iguais).
+                        let lo = 0, hi = queue.length;
+                        while (lo < hi) {
+                            const mid = (lo + hi) >> 1;
+                            if (queue[mid].priority >= priority) lo = mid + 1;
+                            else hi = mid;
+                        }
+                        queue.splice(lo, 0, item);
                         drain();
                     });
                 },
@@ -2613,6 +2643,9 @@
                         widgetVisibilityObserver.unobserve(container);
                         pendingObservation.delete(container);
                     }
+                    // Remove também do observer de visibilidade real e do conjunto de visíveis
+                    viewportVisibilityObserver.unobserve(container);
+                    visibleInViewport.delete(container.dataset.modid);
                     continue;
                 }
 
@@ -2761,8 +2794,16 @@
         if (isFetchingBatch || pendingSteamIDs.size === 0) return;
         isFetchingBatch = true;
 
-        // Empacota até 100 IDs em uma mesma requisição POST
-        const idsToFetch = Array.from(pendingSteamIDs).slice(0, 100);
+        // Prioridade de lote: IDs dos mods atualmente visíveis na tela entram primeiro.
+        // Como a API Steam retorna TODOS os IDs de um lote em uma única requisição POST,
+        // a ordem interna não afeta a velocidade de cada ID dentro do mesmo lote.
+        // O ganho é para páginas com >100 mods (múltiplos lotes): mods que o usuário
+        // está vendo entram no lote 1 e não precisam esperar o lote 2 ou 3.
+        const allPendingIds = Array.from(pendingSteamIDs);
+        const idsToFetch = [
+            ...allPendingIds.filter(id => visibleInViewport.has(id)),
+            ...allPendingIds.filter(id => !visibleInViewport.has(id))
+        ].slice(0, 100);
         const formData = new URLSearchParams();
         formData.append('itemcount', idsToFetch.length.toString());
         idsToFetch.forEach((id, index) => formData.append(`publishedfileids[${index}]`, id));
@@ -2911,7 +2952,7 @@
     /**
      * Orquestrador de requisições a Mirrors Paralelos
      */
-    async function fetchMirrorAsync(mirrorConfig, modId = null) {
+    async function fetchMirrorAsync(mirrorConfig, modId = null, priority = 0) {
         const cacheKey = mirrorConfig.type === 'per_mod' ? `${CACHE_PREFIX}Mirror_${mirrorConfig.id}_${modId}` : `${CACHE_PREFIX}Mirror_${mirrorConfig.id}`;
         const requestKey = mirrorConfig.type === 'per_mod' ? `${mirrorConfig.id}_${modId}` : mirrorConfig.id;
         const now = Date.now();
@@ -2957,8 +2998,10 @@
                 // burst de requisições simultâneas ao mesmo servidor durante scroll rápido.
                 // Mirrors full_db fazem apenas 1 requisição compartilhada (deduplicada pelo
                 // pendingMirrorRequests acima), então não precisam do semáforo.
+                // O parâmetro priority é repassado: mods visíveis na tela (priority=1)
+                // saltam na frente de mods pré-carregados ainda fora do viewport (priority=0).
                 const res = mirrorConfig.type === 'per_mod'
-                    ? await PerModRequestLimiter.forMirror(mirrorConfig.id).run(() => ApiClient.fetch(finalUrl))
+                    ? await PerModRequestLimiter.forMirror(mirrorConfig.id).run(() => ApiClient.fetch(finalUrl), priority)
                     : await ApiClient.fetch(finalUrl);
 
                 const parsedData = mirrorConfig.type === 'per_mod' ? mirrorConfig.parser(res.responseText, modId) : mirrorConfig.parser(res.responseText);
@@ -2984,12 +3027,12 @@
     /**
      * Varre todos os espelhos e resolve se a melhor versão hospedada está em dia com a Steam.
      */
-    async function getBestModFromMirrors(modId, dateSteam) {
+    async function getBestModFromMirrors(modId, dateSteam, priority = 0) {
         const consultedMirrors = [];
         let bestOutdated = null;
 
         for (const mirrorConfig of GAME.mirrors) {
-            let mirrorCacheObj = await fetchMirrorAsync(mirrorConfig, mirrorConfig.type === 'per_mod' ? modId : null);
+            let mirrorCacheObj = await fetchMirrorAsync(mirrorConfig, mirrorConfig.type === 'per_mod' ? modId : null, priority);
             let modData = null;
 
             if (mirrorCacheObj && mirrorCacheObj.data) {
@@ -3067,7 +3110,12 @@
      */
     function reRenderAllWidgets() {
         for (const container of activeWidgets) {
-            if (!document.documentElement.contains(container)) { activeWidgets.delete(container); continue; }
+            if (!document.documentElement.contains(container)) {
+                activeWidgets.delete(container);
+                viewportVisibilityObserver.unobserve(container);
+                visibleInViewport.delete(container.dataset.modid);
+                continue;
+            }
             if (pendingObservation.has(container)) continue;
             if (container.dataset.modid) renderWidget(container, container.dataset.modid, container.dataset.iscard === 'true');
         }
@@ -3123,7 +3171,14 @@
         if (!isGameSupported) { container.remove(); activeWidgets.delete(container); return; }
 
         const dateSteam = await getSteamDateAsync(modId);
-        const mirrorResult = await getBestModFromMirrors(modId, dateSteam);
+
+        // Prioridade calculada APÓS aguardar os dados da Steam (debounce 100ms + rede):
+        // nesse intervalo, o viewportVisibilityObserver já disparou e atualizou
+        // visibleInViewport, então a prioridade reflete o estado atual da tela.
+        //   priority = 1 → mod visível: salta na frente dos itens pré-carregados na fila
+        //   priority = 0 → mod pré-carregado (200px margin), ainda fora do viewport
+        const priority = visibleInViewport.has(modId) ? 1 : 0;
+        const mirrorResult = await getBestModFromMirrors(modId, dateSteam, priority);
 
         const steamCacheExp = localSteamCache[modId] ? localSteamCache[modId].exp : 0;
         const creationTimeSteam = steamCacheExp ? (steamCacheExp - CACHE_TIME_STEAM_MS) : Date.now();
@@ -3314,7 +3369,49 @@
     // CardZoomIcons e CollectionItems. O container é inserido no DOM com
     // atributo data-swdd-pending="true" e permanece vazio até que a câmera
     // do viewport o alcance; só então o script faz as requisições de rede.
+    //
+    // Sistema de fila inteligente por prioridade (scroll-aware):
+    //   widgetVisibilityObserver (rootMargin 200px) → pré-carrega e aciona renderWidget()
+    //   viewportVisibilityObserver (rootMargin 0px)  → rastreia o que está REALMENTE na tela
+    //
+    // renderWidget() consulta visibleInViewport APÓS resolver a Steam (≥100ms):
+    //   • mod visível  → priority=1 → salta na frente da fila do PerModRequestLimiter
+    //   • mod pré-carregado → priority=0 → aguarda no final da fila
+    //
+    // Resultado prático: ao rolar rapidamente para o fim de uma página longa,
+    // os mods que apareceram na tela são verificados antes dos que estavam
+    // enfileirados do topo — sem precisar esperar toda a fila ser processada.
     // ========================================================================
+
+    /**
+     * Conjunto de mod IDs atualmente visíveis no viewport real (sem margem extra).
+     * Atualizado continuamente pelo viewportVisibilityObserver.
+     * Consultado por renderWidget() e processSteamQueue() para determinar prioridade.
+     */
+    const visibleInViewport = new Set();
+
+    /**
+     * Observer complementar ao widgetVisibilityObserver.
+     * Opera sem rootMargin para distinguir itens realmente na tela dos que foram
+     * apenas pré-carregados pela margem de 200px do observer principal.
+     *
+     * Mantém visibleInViewport atualizado durante toda a vida do widget:
+     * ao entrar no viewport, adiciona o modId; ao sair, remove.
+     * Isso permite que re-renderizações por expiração de cache ou troca de
+     * idioma também beneficiem da prioridade correta.
+     */
+    const viewportVisibilityObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const modId = entry.target.dataset.modid;
+            if (!modId) return;
+            if (entry.isIntersecting) visibleInViewport.add(modId);
+            else visibleInViewport.delete(modId);
+        });
+    }, {
+        rootMargin: '0px',
+        threshold: 0
+    });
+
     const widgetVisibilityObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (!entry.isIntersecting) return;
@@ -3348,6 +3445,11 @@
         pendingObservation.add(container);
         container.dataset.swddPending = 'true';
         widgetVisibilityObserver.observe(container);
+        // Inicia o rastreamento de visibilidade real imediatamente:
+        // o viewportVisibilityObserver atualiza visibleInViewport assim que o container
+        // entra ou sai do viewport sem margem, permitindo que renderWidget() saiba
+        // (após resolver o cache Steam) se o item está de fato visível na tela.
+        viewportVisibilityObserver.observe(container);
     }
 
     // ========================================================================
