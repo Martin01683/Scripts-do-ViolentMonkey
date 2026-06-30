@@ -501,3 +501,32 @@ describe('utils.extractJsonArray', () => {
     test('chave JSON ausente → null',                 () => expect(extractJsonArray(JSON.stringify({other:[1,2]}),'missing')).toBeNull());
     test('aspas simples não fecham indevidamente',   () => expect(extractJsonArray("const arr = [\"it's fine\"];", 'arr')).toBe("[\"it's fine\"]"));
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// translations.exactTimeWarn — regressão: sem <br> manual nos valores
+// ════════════════════════════════════════════════════════════════════════════
+
+const { readFileSync } = require('fs');
+const path = require('path');
+
+describe('translations.exactTimeWarn', () => {
+    const scriptPath = path.resolve(__dirname, '../../Steam Workshop Direct Download.user.js');
+    const scriptContent = readFileSync(scriptPath, 'utf-8');
+
+    // Extrai todos os valores de exactTimeWarn, incluindo strings com aspas escapadas
+    const exactTimeWarnPattern = /exactTimeWarn:\s*'((?:[^'\\]|\\.)*)'/g;
+    const values = [...scriptContent.matchAll(exactTimeWarnPattern)].map(m => m[1]);
+
+    test('o script contém traduções de exactTimeWarn', () => {
+        expect(values.length).toBeGreaterThan(0);
+    });
+
+    test('nenhum idioma usa <br> manual em exactTimeWarn', () => {
+        const withBr = values.filter(v => /<br\s*\/?>/i.test(v));
+        expect(withBr).toEqual([]);
+    });
+
+    test('todos os idiomas possuem exactTimeWarn definido (14 idiomas)', () => {
+        expect(values.length).toBe(14);
+    });
+});
